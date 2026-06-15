@@ -76,7 +76,7 @@ export function distributeRound(
       }
       casinoBills.push(shuffled[deckIndex++]);
       const total = casinoBills.reduce((sum, b) => sum + b, 0);
-      if (total >= 50000) break;
+      if (total >= 50000 || casinoBills.length >= activeColors.length) break;
     }
 
     casinoBills.sort((a, b) => b - a);

@@ -112,29 +112,78 @@ UI 구조와 턴 흐름(굴리기 → 카지노 선택 → 다음 플레이어) 
 
 ---
 
+## 2026-06-15 — 세션 3
+
+### 완료한 작업
+
+#### DESIGN.md 보완
+- 지폐 커트라인 기본값(50,000)을 게임 시작 전 옵션에서 변경 가능한 설정값으로 명시
+- 지폐 금액별 컬러코드 테이블 추가 (`#6FCF97` ~ `#F9E74A`)
+
+#### Casino.tsx 업데이트
+- Tailwind 색상 클래스 → DESIGN.md hex 컬러코드 인라인 스타일로 교체
+
+#### game/page.tsx 대규모 업데이트
+- 하드코딩 더미 주사위·소지금·라운드 데이터 전면 제거
+- `useEffect`로 마운트 시 `distributeRound()` 호출 — SSR hydration 충돌 방지
+- `billDeck` state 추가 (초기값 = `distributeRound`의 `remainingDeck`, 이후 반환 지폐 합산)
+- 카지노 클릭 시 실제 상태 연결
+  - 해당 카지노 `dice`에 현재 플레이어 색상·개수 추가
+  - 현재 플레이어 `diceRemaining` 차감
+  - `diceRemaining = 0`인 플레이어 턴 자동 스킵
+- 라운드 종료 감지: 전원 `diceRemaining = 0` → `scoreRound()` 호출
+  - 정산 결과 각 플레이어 `score`에 누적, 반환 지폐 `billDeck`에 추가
+  - 정산 직후 `distributeRound(updatedDeck)` 선제 호출 → `nextRound` state 저장
+- 라운드 종료 버튼 흐름
+  - `nextRound` 있음: **다음 라운드** + 게임 종료
+  - `nextRound` 없음(지폐 부족): 게임 종료만
+- **다음 라운드**: 주사위 전원 반환, `round + 1`, 선제 계산된 카지노 배치 적용
+- **게임 종료**: `gameOver = true` → **메인화면으로** / **다시하기** 버튼 노출
+  - `// TODO: 최종 정산 UI 추가 필요` 주석 삽입
+- 라운드 정보 표시 형식: `"n라운드 | 남은 지폐 m장"`
+
+#### PlayerPanel.tsx 업데이트
+- `isThinking` prop 제거
+- "생각 중..." 표기를 패널 내부 → 패널 위로 이동 (현재 턴 플레이어에게 항상 표시, LLM 여부 무관)
+
+#### UI 세부 개선
+- 굴리기 버튼 주사위 아래 별도 행 배치 (`invisible`로 공간 유지 → 주사위 위치 고정)
+- 롤 후 주사위 그룹화: 같은 눈 내부 `gap-2`, 그룹 간 `gap-4`
+- 굴리기 시 현재 플레이어의 `diceRemaining`만큼만 주사위 생성
+
+#### bill-setup.ts 가드레일 추가
+- 카지노당 최대 배치 지폐 수 = 플레이어 수(`activeColors.length`)
+- 커트라인 미달성 시에도 인원 수 도달 시 즉시 다음 카지노로 이동
+
+---
+
+### 현재 상태
+
+배팅 → 라운드 종료 → 정산 → 다음 라운드 / 게임 종료 전체 흐름 동작 확인.  
+`scoring.ts`·`bill-setup.ts`는 게임 화면에서 직접 호출.  
+`game-engine.ts`의 `applyRoll()` / `applyAction()` / `applyScoring()`은 미연결 상태이며, 향후 LLM 연동 시 활용 예정.
+
+---
+
 ## 다음 세션에서 이어할 작업
 
 ### 우선순위 높음
-1. **게임 엔진 연결** — UI의 턴 흐름을 `src/lib/game-engine.ts`의 `applyRoll()` / `applyAction()` / `applyScoring()`와 실제로 연결
-   - 현재 `game/page.tsx`의 Mock 상태를 `GameState`로 교체
-   - 카지노 클릭 시 `applyAction()` 호출 → 상태 업데이트 → 다음 턴/라운드 전환
-   - 모든 플레이어 주사위 소진 시 `applyScoring()` 호출 후 라운드 결과 표시
+1. **시작 플레이어 선택** — 현재 항상 플레이어 1(index 0)이 먼저 시작.  
+   매 라운드 랜덤 또는 규칙 기반(이전 라운드 마지막 플레이어, 최소 소지금 등)으로 결정해야 함.
 
 2. **로비 페이지** (`src/app/page.tsx`)
    - 플레이어 수 선택 (2~4명)
    - 각 플레이어: 인간 / LLM 선택, 색상 선택, LLM이면 모델 ID 입력
-   - 설정 완료 후 `/game`으로 `GameState` 초기값 전달
+   - 설정 완료 후 `/game`으로 초기 설정 전달
 
 3. **LLM 턴 자동 진행** — LLM 플레이어 차례에 `/api/llm-action` 호출 후 자동 액션 적용
-   - PlayerPanel의 `isThinking` prop 활성화
    - "생각 중..." UI 표시 중 버튼/클릭 비활성
 
 ### 우선순위 보통
-4. **라운드 결과 표시** — 라운드 종료 시 카지노별 정산 결과 (누가 얼마를 받았는지)
-5. **게임 종료 화면** — 최종 순위와 점수 표시
+4. **최종 정산 UI** — `game/page.tsx`의 `TODO` 주석 위치에 구현. 플레이어별 최종 순위·소지금 표시
+5. **라운드별 정산 결과 표시** — 현재 콘솔 로그만 출력. 카지노별 지급 결과를 화면에 표시
 
 ### 미결 사항
-- [ ] 시작 플레이어 선택 방식: 현재는 랜덤. DESIGN.md는 "이전 라운드 마지막 플레이어 또는 최소 금액 플레이어"를 미래 옵션으로 언급함
 - [ ] `reasoning` 문자열을 화면에 표시할지 여부 (디버깅 목적)
 - [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
 - [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기

@@ -25,10 +25,9 @@ interface PlayerPanelProps {
   player: PlayerState;
   label: string;
   isActive: boolean;
-  isThinking: boolean;
 }
 
-export function PlayerPanel({ player, label, isActive, isThinking }: PlayerPanelProps) {
+export function PlayerPanel({ player, label, isActive }: PlayerPanelProps) {
   return (
     <div
       className={[
@@ -57,10 +56,6 @@ export function PlayerPanel({ player, label, isActive, isThinking }: PlayerPanel
         {player.score.toLocaleString()}
       </div>
 
-      {/* LLM thinking indicator */}
-      {isThinking && (
-        <p className="text-xs text-yellow-400 animate-pulse">생각 중...</p>
-      )}
     </div>
   );
 }

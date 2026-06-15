@@ -30,6 +30,21 @@ A local-execution board game simulator for **Las Vegas** (dice placement game), 
   - 90,000 x 3
   - 100,000 x 1
 
+**Bill colors (for UI rendering):**
+
+| Amount  | Hex       |
+|---------|-----------|
+| 10,000  | `#6FCF97` |
+| 20,000  | `#56CCB8` |
+| 30,000  | `#56B4CC` |
+| 40,000  | `#5B8DEF` |
+| 50,000  | `#9B7FE8` |
+| 60,000  | `#D47FCC` |
+| 70,000  | `#E87F9B` |
+| 80,000  | `#F2994A` |
+| 90,000  | `#F2C94C` |
+| 100,000 | `#F9E74A` |
+
 ### Game Overview
 
 Players roll dice and place them on casinos. After all dice are placed, each casino pays out to the player(s) with the most dice there. The player with the most total money at game end wins.
@@ -44,6 +59,8 @@ Bills are distributed to casinos in order from casino 1 to casino 6:
 4. If the total is under 50,000 — continue adding to the same casino.
 5. If the total is 50,000 or more — move on to the next casino.
 6. After all casinos are set up, sort each casino's bills in descending order.
+
+> **Cutoff threshold**: Defaults to **50,000**. Configurable in game setup options before starting a new game.
 
 ### Round Progression
 

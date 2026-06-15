@@ -37,16 +37,16 @@
 │   │   ├── scoring.ts           # 라운드 정산 (타이 제거 포함)
 │   │   ├── game-engine.ts       # 게임 상태 기계 전체
 │   │   └── llm-client.ts        # 멀티 프로바이더 LLM 클라이언트
-│   ├── components/              # (미구현) UI 컴포넌트
-│   │   ├── Casino.tsx
-│   │   ├── PlayerPanel.tsx
-│   │   └── DiceRoll.tsx
+│   ├── components/
+│   │   ├── Casino.tsx           # 카지노 카드 (지폐 스택 · 주사위 배치 표시)
+│   │   ├── PlayerPanel.tsx      # 플레이어 정보 패널 (소지금 · 주사위 수 · 활성 강조)
+│   │   └── DiceRoll.tsx         # Die 컴포넌트 (3×3 pip 그리드, value=0 이면 빈 주사위)
 │   └── app/
 │       ├── globals.css
 │       ├── layout.tsx
-│       ├── page.tsx             # 로비 (플레이어 설정)
+│       ├── page.tsx             # 로비 (미구현 — 플레이어 설정 예정)
 │       ├── game/
-│       │   └── page.tsx         # 게임 보드
+│       │   └── page.tsx         # 게임 보드 (배팅·정산·라운드 전환 동작 중)
 │       └── api/
 │           └── llm-action/
 │               └── route.ts     # LLM 호출 API 엔드포인트 (서버 전용)
@@ -88,6 +88,18 @@ SDK는 동적 import(`await import(...)`)로 지연 로드하므로 사용하지
 ### 6. `CasinoNumber` 타입
 
 `1 | 2 | 3 | 4 | 5 | 6` 유니온 타입으로 정의되어 있다. `Record<CasinoNumber, CasinoState>` 를 생성할 때 `Object.fromEntries` + 캐스팅 대신 명시적 루프를 사용해야 TypeScript 에러가 없다.
+
+### 7. 카지노 지폐 장수 상한 (가드레일)
+
+`distributeRound()`는 커트라인 금액 도달 여부와 무관하게, 배치 지폐 수가 `activeColors.length`(= 플레이어 수)에 도달하면 다음 카지노로 넘어간다. 커트라인을 높게 설정할 경우 지폐가 무제한 쌓이는 것을 방지한다.
+
+### 8. SSR Hydration 안전 처리
+
+`Math.random()`을 포함하는 초기화 로직(지폐 배치, 주사위 생성)은 모두 `useEffect` 또는 버튼 이벤트 핸들러 안에서만 실행한다. SSR 단계에서는 빈 상태를 렌더링하고, 클라이언트 마운트 후 상태를 채워 hydration 불일치를 방지한다.
+
+### 9. 다음 라운드 배치 선제 계산
+
+라운드 정산(`scoreRound`) 직후, 업데이트된 `billDeck`으로 `distributeRound()`를 즉시 호출해 결과를 `nextRound` state에 저장한다. UI는 이 값의 null 여부로 "다음 라운드" 버튼 노출 여부를 결정하며, 사용자가 버튼을 누를 때는 이미 계산된 결과를 그대로 적용한다.
 
 ---
 

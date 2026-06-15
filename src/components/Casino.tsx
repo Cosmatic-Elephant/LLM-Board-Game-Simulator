@@ -9,17 +9,17 @@ const PLAYER_SQ: Record<Color, string> = {
   blue:   "bg-blue-500",
 };
 
-const BILL_STYLE: Record<number, string> = {
-  10000:  "bg-slate-100  text-slate-800",
-  20000:  "bg-green-100  text-green-800",
-  30000:  "bg-sky-200    text-sky-800",
-  40000:  "bg-blue-200   text-blue-900",
-  50000:  "bg-violet-200 text-violet-900",
-  60000:  "bg-amber-100  text-amber-800",
-  70000:  "bg-lime-200   text-lime-800",
-  80000:  "bg-orange-200 text-orange-900",
-  90000:  "bg-yellow-200 text-yellow-900",
-  100000: "bg-red-200    text-red-900",
+const BILL_COLOR: Record<number, string> = {
+  10000:  "#6FCF97",
+  20000:  "#56CCB8",
+  30000:  "#56B4CC",
+  40000:  "#5B8DEF",
+  50000:  "#9B7FE8",
+  60000:  "#D47FCC",
+  70000:  "#E87F9B",
+  80000:  "#F2994A",
+  90000:  "#F2C94C",
+  100000: "#F9E74A",
 };
 
 const COLOR_ORDER: Color[] = ["red", "yellow", "green", "blue"];
@@ -83,10 +83,8 @@ export function Casino({ number, state, canPlace, selectable, highlighted, onHov
         {state.bills.map((bill, i) => (
           <div
             key={i}
-            className={[
-              "px-2 py-0.5 text-xs font-mono font-semibold text-center rounded-sm select-none",
-              BILL_STYLE[bill] ?? "bg-gray-200 text-gray-800",
-            ].join(" ")}
+            className="px-2 py-0.5 text-xs font-mono font-semibold text-center rounded-sm select-none"
+            style={{ backgroundColor: BILL_COLOR[bill] ?? "#e5e7eb", color: "#1a1a1a" }}
           >
             {bill.toLocaleString()}
           </div>
