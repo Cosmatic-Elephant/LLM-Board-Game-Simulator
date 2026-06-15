@@ -52,7 +52,7 @@ export interface DistributeResult {
 /**
  * Distributes bills from the deck to the 6 casinos for a new round.
  *
- * Rule: keep drawing bills for a casino until its total >= 100,000,
+ * Rule: keep drawing bills for a casino until its total >= 50,000,
  * then move to the next casino. Bills on each casino are sorted descending.
  *
  * Returns null if the deck runs out before all 6 casinos are set up
@@ -76,7 +76,7 @@ export function distributeRound(
       }
       casinoBills.push(shuffled[deckIndex++]);
       const total = casinoBills.reduce((sum, b) => sum + b, 0);
-      if (total >= 100000) break;
+      if (total >= 50000) break;
     }
 
     casinoBills.sort((a, b) => b - a);

@@ -41,8 +41,8 @@ Bills are distributed to casinos in order from casino 1 to casino 6:
 1. Draw a random bill from the shuffled pile.
 2. Place it on the current casino.
 3. Sum all bills on that casino.
-4. If the total is under 100,000 — continue adding to the same casino.
-5. If the total is 100,000 or more — move on to the next casino.
+4. If the total is under 50,000 — continue adding to the same casino.
+5. If the total is 50,000 or more — move on to the next casino.
 6. After all casinos are set up, sort each casino's bills in descending order.
 
 ### Round Progression
