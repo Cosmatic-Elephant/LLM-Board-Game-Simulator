@@ -99,7 +99,19 @@ SDK는 동적 import(`await import(...)`)로 지연 로드하므로 사용하지
 
 ### 9. 다음 라운드 배치 선제 계산
 
-라운드 정산(`scoreRound`) 직후, 업데이트된 `billDeck`으로 `distributeRound()`를 즉시 호출해 결과를 `nextRound` state에 저장한다. UI는 이 값의 null 여부로 "다음 라운드" 버튼 노출 여부를 결정하며, 사용자가 버튼을 누를 때는 이미 계산된 결과를 그대로 적용한다.
+`runScoringAnimation()` 진입 시점에 `distributeRound()`를 즉시 호출해 결과를 `nextRound` state에 저장한다. UI는 이 값의 null 여부로 "다음 라운드" 버튼 노출 여부를 결정하며, 사용자가 버튼을 누를 때는 이미 계산된 결과를 그대로 적용한다. 스킵 기능 추가로 인해 애니메이션 종료 콜백이 아닌 시작 시점으로 앞당겼다.
+
+### 10. 연출 즉시 적용 원칙
+
+`runScoringAnimation()` 시작 시 실제 게임 상태(플레이어 점수·`billDeck`·`nextRound`)를 **즉시** 최종값으로 반영한다. 연출 타이머가 하나씩 실제 상태를 변경하는 구조가 아니므로, 스킵·재시작 등 어느 시점에 중단해도 데이터 일관성이 보장된다.
+
+### 11. displayScore 분리
+
+`players[].score`는 정산 시작 즉시 최종값으로 업데이트된다. PlayerPanel에는 연출 진행 중에만 `displayScores: Record<Color, number>` state를 `displayScore` prop으로 전달하고, 연출 완료·스킵 시에는 `player.score`로 자동 복귀한다. `finalScoresRef`에 최종값을 사전 저장해 스킵 핸들러에서 즉시 동기화한다.
+
+### 12. 정산 연출 Flash 방지
+
+페이드 중(`isFading`)에서 완료(`isEliminated`)로 전환할 때 **동일한 animation string**을 유지한다. React는 style prop 변화가 없으면 DOM을 건드리지 않으므로 CSS `animation-fill-mode: forwards`가 해제되지 않고 `opacity: 0` 상태가 동결된다. 이 규칙은 주사위(`dice-sq-exit`)와 지폐(`bill-exit`) 모두에 적용된다.
 
 ---
 

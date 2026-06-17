@@ -3,7 +3,9 @@ import type {
   CasinoNumber,
   CasinoState,
   CasinoScoreResult,
+  CasinoRankEvent,
   RoundScoreResult,
+  ScoringStep,
 } from "@/types/game";
 import { CASINO_NUMBERS } from "@/lib/bill-setup";
 
@@ -58,6 +60,8 @@ export function scoreCasino(
 
 /**
  * Scores all 6 casinos and returns aggregate results.
+ *
+ * Prefer computeScoringSteps() when you need staged animation support.
  */
 export function scoreRound(
   casinos: Record<CasinoNumber, CasinoState>,
@@ -82,4 +86,78 @@ export function scoreRound(
   }
 
   return { totalPayouts, returnedBills, casinoResults };
+}
+
+/**
+ * Produces the ordered rank events for one casino, mirroring scoreCasino's logic.
+ * Used by computeScoringSteps to drive per-casino animation sequencing.
+ */
+function computeCasinoRankEvents(
+  casino: CasinoState,
+  activeColors: Color[]
+): CasinoRankEvent[] {
+  const entries = activeColors
+    .map((color) => ({ color, count: casino.dice[color] }))
+    .filter(({ count }) => count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  const events: CasinoRankEvent[] = [];
+  let billIndex = 0;
+  let i = 0;
+
+  while (i < entries.length && billIndex < casino.bills.length) {
+    const currentCount = entries[i].count;
+    const tied: typeof entries = [];
+    while (i < entries.length && entries[i].count === currentCount) {
+      tied.push(entries[i]);
+      i++;
+    }
+
+    if (tied.length > 1) {
+      events.push({ kind: "tie-eliminated", colors: tied.map((e) => e.color) });
+    } else {
+      events.push({
+        kind: "payout",
+        color: tied[0].color,
+        billIndex,
+        amount: casino.bills[billIndex],
+      });
+      billIndex++;
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Runs scoreRound() once and wraps the results as an ordered step sequence.
+ *
+ * Steps 1–6: "casino-reveal" — per-casino payouts, returned bills, and rank events
+ *            for driving the animation sequence.
+ * Step 7:    "score-update"  — total deltas and all returned bills for final state update.
+ */
+export function computeScoringSteps(
+  casinos: Record<CasinoNumber, CasinoState>,
+  activeColors: Color[]
+): ScoringStep[] {
+  const { casinoResults, totalPayouts, returnedBills } = scoreRound(
+    casinos,
+    activeColors
+  );
+
+  const steps: ScoringStep[] = CASINO_NUMBERS.map((n) => ({
+    kind: "casino-reveal" as const,
+    casinoNumber: n,
+    payouts: casinoResults[n].payouts,
+    returnedBills: casinoResults[n].returnedBills,
+    events: computeCasinoRankEvents(casinos[n], activeColors),
+  }));
+
+  steps.push({
+    kind: "score-update",
+    deltaByColor: totalPayouts,
+    returnedBills,
+  });
+
+  return steps;
 }

@@ -29,12 +29,44 @@ interface CasinoProps {
   state: CasinoState;
   canPlace: boolean;   // visual: bright vs dark
   selectable: boolean; // functional: click enabled
+  /** Card ring highlight — driven by hover OR programmatic scoring state. */
   highlighted: boolean;
+  /** Scoring animation: dice rows currently animating out (tie elimination). */
+  scoringFadingColors?: Color[];
+  /** Scoring animation: dice rows that finished fading — kept invisible. */
+  scoringEliminatedColors?: Color[];
+  /** Scoring animation: dice row for this color is highlighted (current rank winner). */
+  scoringHighlightedColor?: Color | null;
+  /** Scoring animation: bill at this index is highlighted. */
+  scoringHighlightedBillIdx?: number | null;
+  /** Scoring animation: bill at this index is currently fading out. */
+  scoringExitingBillIdx?: number | null;
+  /** Scoring animation: bill indices that finished fading — kept invisible. */
+  scoringExitedBillIndices?: number[];
+  /** Scoring animation: all remaining dice/bills fade out simultaneously (table clear). */
+  scoringTableClearing?: boolean;
+  fadeDuration?: number;
   onHover: (n: number | null) => void;
   onSelect?: () => void;
 }
 
-export function Casino({ number, state, canPlace, selectable, highlighted, onHover, onSelect }: CasinoProps) {
+export function Casino({
+  number,
+  state,
+  canPlace,
+  selectable,
+  highlighted,
+  scoringFadingColors,
+  scoringEliminatedColors,
+  scoringHighlightedColor,
+  scoringHighlightedBillIdx,
+  scoringExitingBillIdx,
+  scoringExitedBillIndices,
+  scoringTableClearing,
+  fadeDuration = 400,
+  onHover,
+  onSelect,
+}: CasinoProps) {
   const hasAnyDice = COLOR_ORDER.some((c) => state.dice[c] > 0);
 
   return (
@@ -58,12 +90,30 @@ export function Casino({ number, state, canPlace, selectable, highlighted, onHov
             ? COLOR_ORDER.map((color) => {
                 const count = state.dice[color];
                 if (!count) return null;
+
+                const isFading = scoringFadingColors?.includes(color) ?? false;
+                const isEliminated = scoringEliminatedColors?.includes(color) ?? false;
+                const isClearing = (scoringTableClearing ?? false) && !isEliminated && !isFading;
+                const isWinner = scoringHighlightedColor === color;
+
                 return (
-                  <div key={color} className="flex flex-wrap gap-0.5">
+                  <div
+                    key={color}
+                    className="flex flex-wrap gap-0.5"
+                    style={
+                      isFading || isEliminated || isClearing
+                        ? { animation: `dice-sq-exit ${fadeDuration}ms ease-out forwards` }
+                        : undefined
+                    }
+                  >
                     {Array.from({ length: count }, (_, i) => (
                       <div
                         key={i}
-                        className={`w-3.5 h-3.5 rounded-sm ${PLAYER_SQ[color]}`}
+                        className={[
+                          `w-3.5 h-3.5 rounded-sm ${PLAYER_SQ[color]}`,
+                          "transition-all duration-150",
+                          isWinner ? "ring-1 ring-white scale-125 shadow shadow-white/30" : "",
+                        ].join(" ")}
                       />
                     ))}
                   </div>
@@ -78,17 +128,35 @@ export function Casino({ number, state, canPlace, selectable, highlighted, onHov
         </span>
       </div>
 
-      {/* ── Bills (overlapping stack, largest on top) ── */}
+      {/* ── Bills (stack, largest on top) ── */}
       <div className="flex flex-col gap-1">
-        {state.bills.map((bill, i) => (
-          <div
-            key={i}
-            className="px-2 py-0.5 text-xs font-mono font-semibold text-center rounded-sm select-none"
-            style={{ backgroundColor: BILL_COLOR[bill] ?? "#e5e7eb", color: "#1a1a1a" }}
-          >
-            {bill.toLocaleString()}
-          </div>
-        ))}
+        {state.bills.map((bill, i) => {
+          const isHighlighted = scoringHighlightedBillIdx === i;
+          const isExiting = scoringExitingBillIdx === i;
+          const isExited = scoringExitedBillIndices?.includes(i) ?? false;
+          const isClearing = (scoringTableClearing ?? false) && !isExited && !isExiting;
+
+          return (
+            <div
+              key={i}
+              className={[
+                "px-2 py-0.5 text-xs font-mono font-semibold text-center rounded-sm select-none",
+                "transition-transform duration-150",
+                isHighlighted ? "ring-2 ring-white scale-105" : "",
+              ].join(" ")}
+              style={{
+                backgroundColor: BILL_COLOR[bill] ?? "#e5e7eb",
+                color: "#1a1a1a",
+                filter: isHighlighted ? "brightness(1.4)" : undefined,
+                animation: isExiting || isExited || isClearing
+                  ? `bill-exit ${fadeDuration}ms ease-out forwards`
+                  : undefined,
+              }}
+            >
+              {bill.toLocaleString()}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

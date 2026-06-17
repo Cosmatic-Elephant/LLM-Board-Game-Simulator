@@ -25,9 +25,10 @@ interface PlayerPanelProps {
   player: PlayerState;
   label: string;
   isActive: boolean;
+  displayScore?: number;
 }
 
-export function PlayerPanel({ player, label, isActive }: PlayerPanelProps) {
+export function PlayerPanel({ player, label, isActive, displayScore }: PlayerPanelProps) {
   return (
     <div
       className={[
@@ -53,7 +54,7 @@ export function PlayerPanel({ player, label, isActive }: PlayerPanelProps) {
         주사위 {player.diceRemaining}개
       </div>
       <div className={`text-sm font-mono font-semibold ${isActive ? "text-white" : "text-gray-300"}`}>
-        {player.score.toLocaleString()}
+        {(displayScore ?? player.score).toLocaleString()}
       </div>
 
     </div>

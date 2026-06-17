@@ -216,28 +216,122 @@ const DIE_STAGGER_MS    = 100;  // 주사위 순차 등장 간격
 
 ---
 
+---
+
+## 2026-06-17 — 세션 5
+
+### 완료한 작업
+
+#### 정산 단계 분리 (`src/lib/scoring.ts`, `src/types/game.ts`)
+
+- **`CasinoRankEvent` 타입** — 카지노 내 순위별 이벤트: `tie-eliminated` / `payout`
+- **`ScoringStep` 타입** — 연출 구동용 ordered sequence: `casino-reveal` ×6 + `score-update` ×1
+- **`computeCasinoRankEvents()`** — `scoreCasino()` 알고리즘을 미러링해 순위별 이벤트 목록 생성 (내부 함수)
+- **`computeScoringSteps()`** — `scoreRound()` 한 번 실행 후 결과를 step 배열로 포장, 각 `casino-reveal` step에 `events` 포함
+
+#### 정산 연출 전체 구현
+
+##### 새 CSS 키프레임 (`src/app/globals.css`)
+- `@keyframes dice-sq-exit` — 카지노 내 플레이어 주사위 사각형 페이드 아웃
+- `@keyframes bill-exit` — 지폐 페이드 아웃
+- `@keyframes score-popup` — 소지금 증가 팝업 (fade-in + 위로 float + fade-out, 1200ms)
+
+##### `ScoringAnimState` 인터페이스 (`src/app/game/page.tsx`)
+- `casinoIdx`, `fadingColors`, `winnerColor`, `highlightedBillIdx`, `exitingBillIdx`
+- `eliminatedColorsByCasino: Partial<Record<number, Color[]>>` — 카지노 인덱스 키 map (전환 시 리셋하지 않음)
+- `exitedBillsByCasino: Partial<Record<number, number[]>>` — 동상
+- `tableClearing: boolean` — 최종 테이블 정리 페이즈
+
+##### `runScoringAnimation()` 연출 순서
+1. **즉시 반영**: 플레이어 점수·`billDeck`·`nextRound`를 타이머 없이 시작 시점에 적용
+2. `displayScores`를 연출 전 점수로 초기화, `finalScoresRef`에 최종값 저장
+3. 카지노 1–6 순서대로: 하이라이트 → 동률 배제 fade → 수령자 하이라이트 → 지폐 fade + `displayScores` 증가 + 소지금 팝업 동시 실행
+4. `tableClearing: true` 전환 → 전체 카지노 잔여 주사위/지폐 동시 fade out
+5. `setScoringAnim(null)` + `setCasinos(EMPTY_CASINOS)` + `setRoundEnded(true)` 원자적 처리
+
+##### Flash 없는 fade 상태 유지
+- 페이드 중(`isFading`) → 완료(`isEliminated`) 전환 시 동일한 animation string 유지
+- React가 DOM 업데이트를 스킵 → CSS `forwards` fill이 유지되어 opacity:0 동결
+- 크로스-카지노 지속: 카지노 전환 후에도 이전 카지노의 eliminated/exited 상태가 map에 보존
+
+##### `Casino.tsx` 새 props
+`scoringFadingColors`, `scoringEliminatedColors`, `scoringHighlightedColor`, `scoringHighlightedBillIdx`, `scoringExitingBillIdx`, `scoringExitedBillIndices`, `scoringTableClearing`
+
+#### displayScore 분리 + 스킵 기능
+
+- `displayScores: Record<Color, number>` state — 연출 중에만 PlayerPanel에 전달
+- `handleSkipScoring()` — 타이머 전부 취소 + `displayScores` 즉시 동기화 + 라운드 종료
+- 정산 진행 중 화면 중앙에 **스킵 버튼** 표시, 연출 종료 시 제거
+- `PlayerPanel`에 `displayScore?: number` prop 추가
+
+#### 소지금 증가 팝업
+
+- 지폐 페이드 아웃 시점과 동시에 `scoreDeltaPopups` 업데이트 (`{ amount, key }`)
+- `+{금액}` 텍스트가 PlayerPanel 위에서 등장 → float-up → 페이드 아웃 (1200ms)
+- `key` 증가로 동일 플레이어 연속 수령 시 애니메이션 재시작
+
+#### 게임 종료 우승자 텍스트
+
+- 최고 점수 플레이어(동점 전원) — "최종 소지금 {금액}으로 {이름} 우승!" 노란색 Bold
+- `// TODO: 최종 정산 UI 추가 필요` 주석 제거 및 실제 UI로 대체
+
+#### 굴리기 버튼 즉시 활성
+
+- 기존: 마지막 주사위 페이드 인 완료 후 버튼 페이드 인 + `rollButtonEnabled` gate
+- 변경: 주사위 등장 즉시 버튼 표시 + 즉시 클릭 가능 (페이드 인 없음)
+- `rollButtonEnabled` state, `rollTimerRef`, `buttonAnimDelay` 전부 제거, `triggerPreRoll` 단순화
+
+#### q키 테스트 단축키 (TEST ONLY)
+
+- `pre-roll`: q → `handleRoll()` / `post-roll`: q → 베팅 가능 카지노 중 랜덤 선택 후 `handleCasinoSelect()`
+- `qHandlerRef` 패턴: 빈 deps `useEffect`로 리스너 1회 등록, ref를 매 렌더에 갱신해 stale closure 방지
+- 관련 코드에 `// TEST ONLY — delete before release` 주석 명시
+
+#### 기타 정리
+
+- `handleCasinoSelect` 내 베팅 콘솔 로그 제거
+
+---
+
+### 현재 상태
+
+정산 연출 전체(동률 배제 → 순위별 지급 → 테이블 클리어 → 라운드/게임 종료 UI) 완료.  
+displayScore 연출, 스킵, 소지금 팝업, 우승자 텍스트 모두 동작 확인.  
+`npx tsc --noEmit` 에러 없음 확인.
+
+---
+
 ## 다음 세션에서 이어할 작업
 
-### 최우선 — 글로벌 상황 애니메이션
-전체 플레이어 차례가 끝난 뒤 진행되는 화면 전환 연출. 구현 범위 예시:
-- **라운드 종료 / 정산 진입**: 카지노 카드들의 전환 연출 (페이드, 슬라이드 등)
-- **정산 결과 표시**: 카지노별 지급 결과를 화면에 순차 표시 (현재 콘솔 로그만 출력)
-- **다음 라운드 전환**: 새 빌 배치가 등장하는 연출
-- **게임 종료 / 최종 정산**: 플레이어 최종 순위·소지금 표시 (`game/page.tsx`의 `TODO` 위치)
-
 ### 우선순위 높음
-1. **시작 플레이어 선택** — 현재 항상 플레이어 1(index 0)이 먼저 시작.  
-   매 라운드 랜덤 또는 규칙 기반으로 결정해야 함.
 
-2. **로비 페이지** (`src/app/page.tsx`)
-   - 플레이어 수 선택 (2~4명)
-   - 각 플레이어: 인간 / LLM 선택, 색상 선택, LLM이면 모델 ID 입력
-   - 설정 완료 후 `/game`으로 초기 설정 전달
+1. **로비 페이지** (`src/app/page.tsx` 전면 재작성)
+   - `"use client"` 컴포넌트
+   - state: `playerCount` (2|3|4), 슬롯별 `{ isLLM, modelId }` 배열
+   - 플레이어 수 선택 버튼 → 해당 수만큼 행 표시
+   - 각 행: 색상 dot + 이름 + 인간/LLM 토글 + (LLM 선택 시) 모델 ID 입력
+   - 시작 버튼: `PlayerConfig[]` 빌드 → `sessionStorage("las-vegas-player-config")` 저장 → `/game` 이동
+   - 상수: `COLORS: Color[] = ["red","yellow","green","blue"]`, `DEFAULT_MODEL = "claude-sonnet-4-6"`, `SESSION_KEY = "las-vegas-player-config"`
 
-3. **LLM 턴 자동 진행** — LLM 플레이어 차례에 `/api/llm-action` 호출 후 자동 액션 적용
-   - "생각 중..." UI 표시 중 버튼/클릭 비활성
+2. **게임 페이지 — sessionStorage 연동 + 랜덤 시작 플레이어** (`src/app/game/page.tsx`)
+   - 초기 useEffect: `sessionStorage`에서 `PlayerConfig[]` 읽기 → 없으면 `INITIAL_PLAYERS` 폴백
+   - `initialPlayersRef`에 저장 (handleRestart 재사용), activeColors를 config 기반으로 동적 산출
+   - `setCurrentPlayerIndex(Math.floor(Math.random() * configPlayers.length))` — 랜덤 시작
+   - `handleNextRound` / `handleRestart`에도 동일 랜덤 시작 적용
+
+3. **게임 페이지 — LLM 턴 자동 진행**
+   - 새 state/ref: `turn: number`, `initialPlayersRef`, `llmAutoPlayRef`, `llmRequestRef`
+   - `pre-roll` + isLLM → `LLM_ROLL_DELAY_MS(600ms)` 후 자동 roll
+   - `post-roll` + isLLM → `LLM_PLACE_DELAY_MS(500ms)` 후 `/api/llm-action` 호출
+     - `rollCounts`로 `valid_actions` 산출, `LLMGameState` 페이로드 인라인 빌드
+     - 응답 유효 시 `handleCasinoSelect(casino)`, 실패 시 첫 번째 valid casino로 폴백
+     - `llmRequestRef`로 중복 호출 차단
+   - `handleCasinoSelect`에 `setTurn(t => t+1)` 추가
+   - `handleRestart`는 `initialPlayersRef.current` 사용
 
 ### 미결 사항
+
+- [ ] q키 테스트 단축키 — 최종 배포 전 삭제 필요 (`// TEST ONLY` 주석 위치)
 - [ ] `reasoning` 문자열을 화면에 표시할지 여부 (디버깅 목적)
 - [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
 - [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기

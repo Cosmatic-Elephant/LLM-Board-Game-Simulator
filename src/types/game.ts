@@ -118,3 +118,30 @@ export interface RoundScoreResult {
   /** Per-casino breakdown */
   casinoResults: Record<CasinoNumber, CasinoScoreResult>;
 }
+
+// ─── Scoring Steps (staged animation support) ─────────────────────────────────
+
+/** One rank level in a casino's scoring sequence. */
+export type CasinoRankEvent =
+  | { kind: "tie-eliminated"; colors: Color[] }
+  | { kind: "payout"; color: Color; billIndex: number; amount: number };
+
+/**
+ * Ordered sequence produced by computeScoringSteps().
+ *
+ * casino-reveal  ×6  — per-casino payout data + rank events for animation.
+ * score-update   ×1  — aggregate deltas and returned bills; applied to state last.
+ */
+export type ScoringStep =
+  | {
+      kind: "casino-reveal";
+      casinoNumber: CasinoNumber;
+      payouts: Partial<Record<Color, number>>;
+      returnedBills: number[];
+      events: CasinoRankEvent[];
+    }
+  | {
+      kind: "score-update";
+      deltaByColor: Partial<Record<Color, number>>;
+      returnedBills: number[];
+    };
