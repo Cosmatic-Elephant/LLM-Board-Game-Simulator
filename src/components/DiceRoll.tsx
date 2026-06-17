@@ -22,14 +22,24 @@ interface DieProps {
   playerColor: string;
   highlighted?: boolean;
   onHover?: (value: number | null) => void;
+  fadeInDelay?: number;
+  fadeDuration?: number;
+  exiting?: boolean;
 }
 
-export function Die({ value, playerColor, highlighted = false, onHover }: DieProps) {
+export function Die({ value, playerColor, highlighted = false, onHover, fadeInDelay, fadeDuration = 250, exiting = false }: DieProps) {
   const activePips = new Set(PIP_MAP[value] ?? []);
   const bg = PLAYER_BG[playerColor] ?? "bg-gray-400";
 
+  const style = exiting
+    ? { animation: `die-exit ${fadeDuration}ms ease-out forwards`, pointerEvents: "none" as const }
+    : fadeInDelay !== undefined
+    ? { animation: `fade-in-die ${fadeDuration}ms ease-out ${fadeInDelay}ms both` }
+    : undefined;
+
   return (
     <div
+      style={style}
       className={[
         "grid grid-cols-3 grid-rows-3 gap-0.5 p-2 rounded-xl w-14 h-14 cursor-default",
         "transition-all duration-150",
