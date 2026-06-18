@@ -113,6 +113,28 @@ SDK는 동적 import(`await import(...)`)로 지연 로드하므로 사용하지
 
 페이드 중(`isFading`)에서 완료(`isEliminated`)로 전환할 때 **동일한 animation string**을 유지한다. React는 style prop 변화가 없으면 DOM을 건드리지 않으므로 CSS `animation-fill-mode: forwards`가 해제되지 않고 `opacity: 0` 상태가 동결된다. 이 규칙은 주사위(`dice-sq-exit`)와 지폐(`bill-exit`) 모두에 적용된다.
 
+### 13. LLM 턴 자동 진행 — 두 페이즈 패턴
+
+LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 처리하며 두 페이즈로 분리된다.
+
+- **pre-roll**: `turnPhase === "pre-roll"` + `isLLM` → `llmIsRunningRef` 세팅 후 딜레이 → `handleRoll()` 자동 호출. cleanup에서 플래그를 해제하지 않는다(post-roll이 이어받아야 하므로).
+- **post-roll**: `turnPhase === "post-roll"` + `llmIsRunningRef.current` → 딜레이 후 API 호출 → `handleCasinoSelect()`. cleanup에서 플래그를 해제한다.
+
+`turn` state는 `handleCasinoSelect` 완료 시 `setTurn(t => t + 1)`로 증가하며, 이것이 같은 플레이어가 연속으로 LLM 턴을 가질 때 effect를 재트리거하는 역할을 한다. `handleNextRound` / `handleRestart` 시 `turn = 0`, `llmIsRunningRef.current = false` 모두 리셋해야 한다.
+
+### 14. LLM 안전장치 — UI 레이어 단일 차단 원칙
+
+`handleRoll()`·`handleCasinoSelect()` 함수 자체에는 LLM 여부 차단 로직을 두지 않는다. 차단은 UI 레이어에서만 수행한다:
+- 굴리기 버튼: `current.isLLM` 이면 `invisible pointer-events-none` 클래스 적용
+- `casinoSelectable()`: `current.isLLM` 이면 `false` 반환 (Casino의 `selectable` prop)
+- hover 하이라이팅(`onHover`)은 `selectable`에 무관하게 항상 동작한다 — Casino.tsx의 `onMouseEnter`에서 `selectable &&` 게이트를 제거했기 때문
+
+이 원칙 덕분에 LLM effect가 동일 함수를 직접 호출할 수 있으며, 인간 플레이어의 조작만 차단된다.
+
+### 15. `dice_count` snake_case 직렬화 경계
+
+`Action` 타입(내부)은 camelCase `diceCount`를 사용하고, `LLMResponse["action"]`(외부 API 경계)는 snake_case `dice_count`를 사용한다. `/api/llm-action` route.ts는 변환된 `Action` 객체가 아니라 `response.action`(LLMResponse)을 그대로 JSON 반환해야 한다. 클라이언트(page.tsx)는 `data.action.dice_count`로 읽는다. LLM이 camelCase로 응답할 경우를 대비해 `parseResponse()`에서 `diceCount → dice_count` 정규화 처리가 있다.
+
 ---
 
 ## 환경변수

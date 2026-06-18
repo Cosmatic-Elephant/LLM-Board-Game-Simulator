@@ -24,7 +24,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "LLM returned an invalid action" }, { status: 422 });
     }
 
-    return NextResponse.json({ action, reasoning: response.reasoning });
+    // Return response.action (dice_count snake_case) so the client can read it as-is
+    return NextResponse.json({ action: response.action, reasoning: response.reasoning });
   } catch (err) {
     console.error("[llm-action]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

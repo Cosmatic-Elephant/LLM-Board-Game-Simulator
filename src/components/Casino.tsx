@@ -80,7 +80,7 @@ export function Casino({
             : "bg-gray-900/60 border-gray-800/60 opacity-50 cursor-default",
           highlighted ? "ring-2 ring-white opacity-100" : "",
         ].join(" ")}
-        onMouseEnter={() => selectable && onHover(number)}
+        onMouseEnter={() => onHover(number)}
         onMouseLeave={() => onHover(null)}
         onClick={() => { if (selectable) onSelect?.(); }}
       >

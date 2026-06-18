@@ -301,6 +301,58 @@ displayScore 연출, 스킵, 소지금 팝업, 우승자 텍스트 모두 동작
 
 ---
 
+---
+
+## 2026-06-18 — 세션 6
+
+### 완료한 작업
+
+#### sessionStorage 연동 (`src/app/game/page.tsx`)
+- 마운트 `useEffect`에서 `sessionStorage("las-vegas-player-config")` 읽기 → 없으면 `INITIAL_PLAYERS` 폴백
+- `initialPlayersRef`에 초기 플레이어 목록 저장 (`handleRestart` 재사용)
+- TEMP 더미 데이터(4인 중 yellow만 LLM) 주입 코드 삽입 — 로비 구현 전 테스트용 (`// TEMP` 주석)
+
+#### turn 카운터 state 추가 (`src/app/game/page.tsx`)
+- `const [turn, setTurn] = useState(0)` 추가
+- `handleCasinoSelect` 내 베팅 완료 분기 양쪽에 `setTurn(t => t + 1)` 추가
+- `handleNextRound` / `handleRestart`에 `setTurn(0)` 추가
+
+#### LLM 턴 자동 진행 useEffect 구현 (`src/app/game/page.tsx`)
+- deps: `[turn, currentPlayerIndex, turnPhase]`
+- **pre-roll 페이즈**: `llmIsRunningRef` 중복 방지 후 `LLM_ROLL_DELAY_MS(500ms)` 딜레이 → `handleRoll()` 자동 실행
+- **post-roll 페이즈**: `LLM_PLACE_DELAY_MS(500ms)` 후 `/api/llm-action` POST 호출
+  - closure에서 `roll` 결과 포착(rollCounts → valid_actions 빌드), `LLMGameState` 페이로드 인라인 빌드
+  - 응답 `data.action.dice_count`(snake_case) 읽어 `isValidAction` 재검증
+  - 유효 시 `handleCasinoSelect(action.casino)`, 실패/에러 시 첫 번째 valid casino 폴백
+- `llmIsRunningRef`: pre-roll에서 set, post-roll cleanup에서 reset — 두 페이즈 브릿지 역할
+- `handleNextRound` / `handleRestart`에 `llmIsRunningRef.current = false` 리셋 추가
+
+#### LLM 안전장치 (`src/app/game/page.tsx`, `src/components/Casino.tsx`)
+- 굴리기 버튼: `current.isLLM` 이면 `invisible pointer-events-none`
+- `casinoSelectable()`: `current.isLLM` 이면 즉시 `false` 반환
+- Casino.tsx `onMouseEnter` 게이트 제거 → hover 하이라이팅은 LLM 턴에도 유지
+- 함수 자체(`handleRoll`, `handleCasinoSelect`)는 내부 차단 없음 — UI 레이어에서만 차단
+
+#### 직렬화 버그 수정 (`src/app/api/llm-action/route.ts`, `src/lib/llm-client.ts`)
+- route.ts: `response.action`(snake_case `dice_count`)을 그대로 반환 — 이전엔 camelCase `action` 반환해 client에서 `dice_count`가 `undefined`가 되는 버그 존재
+- llm-client.ts `parseResponse`: LLM이 camelCase `diceCount`를 반환한 경우 `dice_count`로 정규화
+- llm-client.ts 시스템 프롬프트: `"dice_count"` 필드명 사용을 명시적으로 강조
+
+#### 응답 속도 개선 (`src/lib/llm-client.ts`)
+- Anthropic `max_tokens`: 512 → 150
+- OpenAI `max_tokens`: 512 → 150
+- Google `maxOutputTokens`: 512 → 150
+
+---
+
+### 현재 상태
+
+LLM 연동 동작 확인 완료 (yellow 플레이어가 주사위 굴리기·카지노 선택 자동 진행).  
+LLM 턴 중 인간 조작 UI가 차단되고, hover 하이라이팅은 유지된다.  
+`npx tsc --noEmit` 에러 없음 확인.
+
+---
+
 ## 다음 세션에서 이어할 작업
 
 ### 우선순위 높음
@@ -311,23 +363,14 @@ displayScore 연출, 스킵, 소지금 팝업, 우승자 텍스트 모두 동작
    - 플레이어 수 선택 버튼 → 해당 수만큼 행 표시
    - 각 행: 색상 dot + 이름 + 인간/LLM 토글 + (LLM 선택 시) 모델 ID 입력
    - 시작 버튼: `PlayerConfig[]` 빌드 → `sessionStorage("las-vegas-player-config")` 저장 → `/game` 이동
-   - 상수: `COLORS: Color[] = ["red","yellow","green","blue"]`, `DEFAULT_MODEL = "claude-sonnet-4-6"`, `SESSION_KEY = "las-vegas-player-config"`
+   - 완료 후 game/page.tsx의 `// TEMP` 더미 블록 삭제
 
-2. **게임 페이지 — sessionStorage 연동 + 랜덤 시작 플레이어** (`src/app/game/page.tsx`)
-   - 초기 useEffect: `sessionStorage`에서 `PlayerConfig[]` 읽기 → 없으면 `INITIAL_PLAYERS` 폴백
-   - `initialPlayersRef`에 저장 (handleRestart 재사용), activeColors를 config 기반으로 동적 산출
-   - `setCurrentPlayerIndex(Math.floor(Math.random() * configPlayers.length))` — 랜덤 시작
-   - `handleNextRound` / `handleRestart`에도 동일 랜덤 시작 적용
+2. **랜덤 시작 플레이어** (`src/app/game/page.tsx`)
+   - 마운트 시 / `handleNextRound` / `handleRestart` 모두 `Math.floor(Math.random() * players.length)` 적용 (현재 0 고정)
 
-3. **게임 페이지 — LLM 턴 자동 진행**
-   - 새 state/ref: `turn: number`, `initialPlayersRef`, `llmAutoPlayRef`, `llmRequestRef`
-   - `pre-roll` + isLLM → `LLM_ROLL_DELAY_MS(600ms)` 후 자동 roll
-   - `post-roll` + isLLM → `LLM_PLACE_DELAY_MS(500ms)` 후 `/api/llm-action` 호출
-     - `rollCounts`로 `valid_actions` 산출, `LLMGameState` 페이로드 인라인 빌드
-     - 응답 유효 시 `handleCasinoSelect(casino)`, 실패 시 첫 번째 valid casino로 폴백
-     - `llmRequestRef`로 중복 호출 차단
-   - `handleCasinoSelect`에 `setTurn(t => t+1)` 추가
-   - `handleRestart`는 `initialPlayersRef.current` 사용
+3. **handleRestart 수정** (`src/app/game/page.tsx`)
+   - 현재: activeColors 하드코딩 `["red","yellow","green","blue"]`, `INITIAL_PLAYERS` 사용
+   - 변경: `initialPlayersRef.current`에서 activeColors·players 모두 산출
 
 ### 미결 사항
 

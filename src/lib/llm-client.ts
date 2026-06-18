@@ -70,7 +70,9 @@ Each turn you will receive a JSON object describing the full game state. Key fie
 
 ## Your Output Format
 
-Respond with only the following JSON. Do not include any explanation outside of the JSON.
+Respond with ONLY the following JSON. Do not include any explanation outside of the JSON block.
+
+**Important:** Use the exact field name "dice_count" (snake_case). Do NOT use "diceCount".
 
 {
   "action": {
@@ -80,7 +82,7 @@ Respond with only the following JSON. Do not include any explanation outside of 
   "reasoning": "Casino 1 has a tie risk between red and green. Securing casino 5 with 80,000 as the current leader is a safer play."
 }
 
-Your chosen action must be one of the options listed in valid_actions. Do not invent actions outside this list.`;
+Your chosen action must exactly match one of the entries in valid_actions (same casino number and same dice_count). Do not invent actions outside this list.`;
 
 // ─── Provider Implementations ─────────────────────────────────────────────────
 
@@ -93,7 +95,7 @@ async function callAnthropic(
 
   const message = await client.messages.create({
     model: modelId,
-    max_tokens: 512,
+    max_tokens: 150,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: JSON.stringify(payload, null, 2) }],
   });
@@ -112,7 +114,7 @@ async function callOpenAI(
 
   const completion = await client.chat.completions.create({
     model: modelId,
-    max_tokens: 512,
+    max_tokens: 150,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: JSON.stringify(payload, null, 2) },
@@ -133,7 +135,7 @@ async function callGoogle(
   const response = await client.models.generateContent({
     model: modelId,
     contents: JSON.stringify(payload, null, 2),
-    config: { systemInstruction: SYSTEM_PROMPT, maxOutputTokens: 512 },
+    config: { systemInstruction: SYSTEM_PROMPT, maxOutputTokens: 150 },
   });
 
   const text = response.text ?? "";
@@ -150,15 +152,21 @@ function parseResponse(raw: string, payload: LLMGameState): LLMResponse {
   try {
     // Strip markdown code fences if present
     const jsonText = raw.replace(/```(?:json)?\s*([\s\S]*?)```/g, "$1").trim();
-    const parsed = JSON.parse(jsonText) as LLMResponse;
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
 
-    const validActions = payload.valid_actions;
-    const chosen = parsed.action;
-    const isValid = validActions.some(
+    // Normalize camelCase diceCount → snake_case dice_count when LLM ignores the prompt
+    const action = parsed.action as Record<string, unknown> | undefined;
+    if (action && action.diceCount !== undefined && action.dice_count === undefined) {
+      action.dice_count = action.diceCount;
+    }
+
+    const response = parsed as unknown as LLMResponse;
+    const chosen = response.action;
+    const isValid = payload.valid_actions.some(
       (a) => a.casino === chosen.casino && a.dice_count === chosen.dice_count
     );
 
-    if (isValid) return parsed;
+    if (isValid) return response;
   } catch {
     // Fall through to fallback
   }

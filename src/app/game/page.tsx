@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import type { Color, CasinoNumber, CasinoState, PlayerState, ScoringStep } from "@/types/game";
+import type { Action, Color, CasinoNumber, CasinoState, LLMGameState, PlayerConfig, PlayerState, ScoringStep } from "@/types/game";
 import { createBillDeck, distributeRound } from "@/lib/bill-setup";
 import { computeScoringSteps } from "@/lib/scoring";
+import { isValidAction } from "@/lib/game-engine";
 import { Casino } from "@/components/Casino";
 import { Die } from "@/components/DiceRoll";
 import { PlayerPanel } from "@/components/PlayerPanel";
@@ -15,6 +16,8 @@ const ROLL_SHUFFLE_MS     = 50;   // interval between random value changes durin
 const DIE_FADE_MS         = 250;  // each die's fade-in duration
 const DIE_STAGGER_MS      = 100;  // delay added per die index (sequential appearance)
 const SCORING_FADE_MS     = 400;  // base duration for every scoring animation step
+const LLM_ROLL_DELAY_MS   = 500;  // delay before LLM auto-roll
+const LLM_PLACE_DELAY_MS  = 500;  // delay before LLM API call (post-roll)
 
 const EMPTY_DICE = { red: 0, yellow: 0, green: 0, blue: 0 };
 
@@ -35,6 +38,8 @@ const INITIAL_PLAYERS: PlayerState[] = [
 ];
 
 const PLAYER_LABELS = ["플레이어 1", "플레이어 2", "플레이어 3", "플레이어 4"];
+
+const SESSION_KEY = "las-vegas-player-config";
 
 const CASINO_NUMBERS: CasinoNumber[] = [1, 2, 3, 4, 5, 6];
 
@@ -78,6 +83,7 @@ export default function GamePage() {
   const [hoveredDiceFace, setHoveredDiceFace] = useState<number | null>(null);
   const [roundEnded, setRoundEnded]         = useState(false);
   const [round, setRound]                   = useState(1);
+  const [turn, setTurn]                     = useState(0);
   const [billDeck, setBillDeck]             = useState<number[]>([]);
   // null = 지폐 부족으로 다음 라운드 불가, non-null = 다음 라운드 준비 완료
   const [nextRound, setNextRound]           = useState<NextRound | null>(null);
@@ -93,6 +99,8 @@ export default function GamePage() {
   const scoringTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [displayScores, setDisplayScores]     = useState<Record<Color, number>>({ red: 0, yellow: 0, green: 0, blue: 0 });
   const finalScoresRef = useRef<Record<Color, number>>({ red: 0, yellow: 0, green: 0, blue: 0 });
+  const initialPlayersRef = useRef<PlayerState[]>(INITIAL_PLAYERS);
+  const llmIsRunningRef   = useRef(false);
   const [scoreDeltaPopups, setScoreDeltaPopups] = useState<Partial<Record<Color, { amount: number; key: number }>>>({});
 
   function triggerPreRoll() {
@@ -100,7 +108,37 @@ export default function GamePage() {
   }
 
   useEffect(() => {
-    const result = distributeRound(createBillDeck(), ["red", "yellow", "green", "blue"]);
+    // TEMP: dummy player config — remove when lobby page is implemented
+    sessionStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify([
+        { color: "red",    isLLM: false, modelId: null },
+        { color: "yellow", isLLM: true,  modelId: "claude-sonnet-4-6" },
+        { color: "green",  isLLM: false, modelId: null },
+        { color: "blue",   isLLM: false, modelId: null },
+      ])
+    );
+    // END TEMP
+
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    const configs = raw
+      ? (JSON.parse(raw) as Array<{ color: Color; isLLM: boolean; modelId: string | null }>)
+      : null;
+    const initialPlayers: PlayerState[] = configs
+      ? configs.map((c) => ({
+          color: c.color,
+          isLLM: c.isLLM,
+          modelId: c.modelId ?? undefined,
+          score: 0,
+          diceRemaining: 8,
+        }))
+      : INITIAL_PLAYERS;
+
+    initialPlayersRef.current = initialPlayers;
+    setPlayers(initialPlayers);
+
+    const activeColors = initialPlayers.map((p) => p.color);
+    const result = distributeRound(createBillDeck(), activeColors);
     if (result) {
       setCasinos(result.casinos);
       setBillDeck(result.remainingDeck);
@@ -117,6 +155,106 @@ export default function GamePage() {
       for (const t of scoringTimersRef.current) clearTimeout(t);
     };
   }, []);
+
+  // ── LLM auto-play ──────────────────────────────────────────────────────────
+  // Triggers on every turn change. Handles both phases in sequence:
+  //   pre-roll  → wait LLM_ROLL_DELAY_MS, then auto-roll
+  //   post-roll → wait LLM_PLACE_DELAY_MS, call /api/llm-action, then bet
+  // llmIsRunningRef bridges the two phases so only one flow runs at a time.
+  useEffect(() => {
+    const currentPlayer = players[currentPlayerIndex];
+    if (!currentPlayer?.isLLM) return;
+    if (roundEnded || scoringAnim !== null) return;
+
+    // ── Phase 1: pre-roll ───────────────────────────────────────────────────
+    if (turnPhase === "pre-roll") {
+      if (llmIsRunningRef.current) return;
+      llmIsRunningRef.current = true;
+
+      const timer = setTimeout(handleRoll, LLM_ROLL_DELAY_MS);
+      // cleanup only cancels the timer; flag stays true so post-roll proceeds
+      return () => clearTimeout(timer);
+    }
+
+    // ── Phase 2: post-roll ──────────────────────────────────────────────────
+    if (turnPhase === "post-roll" && llmIsRunningRef.current) {
+      let cancelled = false;
+
+      const timer = setTimeout(async () => {
+        const validFaceEntries = Object.entries(rollCounts).map(([face, count]) => ({
+          face: Number(face) as CasinoNumber,
+          count,
+        }));
+
+        if (validFaceEntries.length === 0) {
+          llmIsRunningRef.current = false;
+          return;
+        }
+
+        const fallbackCasino = validFaceEntries[0].face;
+
+        const payload: LLMGameState = {
+          game: { round, turn },
+          casinos: Object.fromEntries(
+            CASINO_NUMBERS.map((n) => [
+              String(n),
+              { bills: casinos[n].bills, dice: casinos[n].dice },
+            ])
+          ),
+          players: Object.fromEntries(
+            players.map((p) => [
+              p.color,
+              { is_llm: p.isLLM, score: p.score, dice_remaining: p.diceRemaining },
+            ])
+          ) as LLMGameState["players"],
+          my_color: currentPlayer.color,
+          my_roll: Object.fromEntries(
+            validFaceEntries.map(({ face, count }) => [String(face), count])
+          ),
+          valid_actions: validFaceEntries.map(({ face, count }) => ({
+            casino: face,
+            dice_count: count,
+          })),
+        };
+
+        try {
+          const res = await fetch("/api/llm-action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ modelId: currentPlayer.modelId, payload }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          const data = await res.json() as {
+            action: { casino: number; dice_count: number };
+            reasoning?: string;
+          };
+          const action: Action = {
+            casino: data.action.casino as CasinoNumber,
+            diceCount: data.action.dice_count,
+          };
+
+          if (!isValidAction(action, roll)) {
+            throw new Error("LLM returned an action outside valid_actions");
+          }
+
+          if (!cancelled) handleCasinoSelect(action.casino);
+        } catch (err) {
+          console.error("[LLM] action failed, using fallback:", err);
+          if (!cancelled) handleCasinoSelect(fallbackCasino);
+        } finally {
+          llmIsRunningRef.current = false;
+        }
+      }, LLM_PLACE_DELAY_MS);
+
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+        llmIsRunningRef.current = false;
+      };
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turn, currentPlayerIndex, turnPhase]);
 
   // TEST ONLY — delete before release
   useEffect(() => {
@@ -375,6 +513,7 @@ export default function GamePage() {
         setPlayers(nextPlayers);
         setRoll([]);
         setTurnPhase("pre-roll");
+        setTurn((t) => t + 1);
         runScoringAnimation(scoringSteps, billDeck, activeColors);
         return;
       }
@@ -393,6 +532,7 @@ export default function GamePage() {
       setTurnPhase("pre-roll");
       setHoveredCasino(null);
       setHoveredDiceFace(null);
+      setTurn((t) => t + 1);
       triggerPreRoll();
     }, DIE_FADE_MS);
   }
@@ -403,11 +543,13 @@ export default function GamePage() {
     setBillDeck(nextRound.deck);
     setPlayers((prev) => prev.map((p) => ({ ...p, diceRemaining: 8 })));
     setRound((r) => r + 1);
+    setTurn(0);
     setCurrentPlayerIndex(0);
     setRoundEnded(false);
     setNextRound(null);
     setRoll([]);
     setTurnPhase("pre-roll");
+    llmIsRunningRef.current = false;
     triggerPreRoll();
   }
 
@@ -429,6 +571,7 @@ export default function GamePage() {
     setScoreDeltaPopups({});
     setExitingCasino(null);
     setIsPlacingDice(false);
+    llmIsRunningRef.current = false;
     const dist = distributeRound(createBillDeck(), ["red", "yellow", "green", "blue"]);
     if (!dist) return;
     setCasinos(dist.casinos);
@@ -436,6 +579,7 @@ export default function GamePage() {
     setPlayers(INITIAL_PLAYERS);
     setCurrentPlayerIndex(0);
     setRound(1);
+    setTurn(0);
     setRoll([]);
     setTurnPhase("pre-roll");
     setRoundEnded(false);
@@ -466,6 +610,7 @@ export default function GamePage() {
 
   function casinoSelectable(n: number): boolean {
     if (roundEnded || isPlacingDice || scoringAnim !== null) return false;
+    if (current.isLLM) return false;
     return turnPhase === "post-roll" && rollFaces.has(n);
   }
 
@@ -622,12 +767,12 @@ export default function GamePage() {
                 </div>
               )}
 
-              {/* Roll button — space always reserved; hidden in post-roll */}
+              {/* Roll button — space always reserved; hidden in post-roll or on LLM turns */}
               <button
                 className={[
                   "px-6 py-3 bg-gray-600 hover:bg-gray-500 active:bg-gray-700",
                   "rounded-xl font-bold text-sm transition-colors",
-                  turnPhase !== "pre-roll" ? "invisible" : "",
+                  turnPhase !== "pre-roll" || current.isLLM ? "invisible pointer-events-none" : "",
                 ].join(" ")}
                 onClick={handleRoll}
               >
