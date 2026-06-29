@@ -35,13 +35,8 @@ export function shuffle<T>(arr: T[]): T[] {
   return result;
 }
 
-function emptyDice(activeColors: Color[]): Record<Color, number> {
-  return {
-    red: activeColors.includes("red") ? 0 : 0,
-    yellow: activeColors.includes("yellow") ? 0 : 0,
-    green: activeColors.includes("green") ? 0 : 0,
-    blue: activeColors.includes("blue") ? 0 : 0,
-  };
+function emptyDice(): Record<Color, number> {
+  return { red: 0, yellow: 0, green: 0, blue: 0, orange: 0, purple: 0, pink: 0, white: 0 };
 }
 
 export interface DistributeResult {
@@ -60,7 +55,8 @@ export interface DistributeResult {
  */
 export function distributeRound(
   billDeck: number[],
-  activeColors: Color[]
+  activeColors: Color[],
+  cutline = 50000
 ): DistributeResult | null {
   const shuffled = shuffle([...billDeck]);
   let deckIndex = 0;
@@ -76,14 +72,14 @@ export function distributeRound(
       }
       casinoBills.push(shuffled[deckIndex++]);
       const total = casinoBills.reduce((sum, b) => sum + b, 0);
-      if (total >= 50000 || casinoBills.length >= activeColors.length) break;
+      if (total >= cutline || casinoBills.length >= activeColors.length) break;
     }
 
     casinoBills.sort((a, b) => b - a);
 
     casinos[casinoNum] = {
       bills: casinoBills,
-      dice: emptyDice(activeColors),
+      dice: emptyDice(),
     };
   }
 

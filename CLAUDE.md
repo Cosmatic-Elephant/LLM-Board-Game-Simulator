@@ -33,6 +33,7 @@
 │   ├── types/
 │   │   └── game.ts              # 모든 TypeScript 타입 정의
 │   ├── lib/
+│   │   ├── constants.ts         # PLAYER_COLORS 배열 (8색 key/label/hex) · ColorKey 타입
 │   │   ├── bill-setup.ts        # 빌 덱 생성 · 라운드별 카지노 분배
 │   │   ├── scoring.ts           # 라운드 정산 (타이 제거 포함)
 │   │   ├── game-engine.ts       # 게임 상태 기계 전체
@@ -44,7 +45,7 @@
 │   └── app/
 │       ├── globals.css
 │       ├── layout.tsx
-│       ├── page.tsx             # 로비 (미구현 — 플레이어 설정 예정)
+│       ├── page.tsx             # 로비 (플레이어·게임 설정 팝업, localStorage 연동)
 │       ├── game/
 │       │   └── page.tsx         # 게임 보드 (배팅·정산·라운드 전환 동작 중)
 │       └── api/
@@ -130,6 +131,18 @@ LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 
 - hover 하이라이팅(`onHover`)은 `selectable`에 무관하게 항상 동작한다 — Casino.tsx의 `onMouseEnter`에서 `selectable &&` 게이트를 제거했기 때문
 
 이 원칙 덕분에 LLM effect가 동일 함수를 직접 호출할 수 있으며, 인간 플레이어의 조작만 차단된다.
+
+### 16. 로비 설정 영속화 — localStorage 두 키 패턴
+
+로비 팝업의 설정값은 **localStorage** 두 키에 분리 저장된다:
+- `las-vegas:playerConfig` — 플레이어 배열 (`color`, `label`, `hex`, `name`, `isLLM`, `modelId`)
+- `las-vegas:gameSettings` — `{ humanFirst: boolean, cutline: number }`
+
+팝업이 열릴 때 저장값을 불러오고, 설정이 바뀔 때마다 자동 저장(`useEffect`). 게임 시작 시 `handleStartGame()`이 최종값을 덮어쓴 뒤 `/game`으로 이동한다. game/page.tsx 마운트 `useEffect`에서 같은 키를 읽으며, 없으면 4색 기본 플레이어로 폴백한다. sessionStorage가 아닌 localStorage를 사용하므로 탭을 닫아도 설정이 유지된다.
+
+### 17. Color 타입 8색 확장 주의사항
+
+`Color` 타입(`src/types/game.ts`)은 8색 유니온이다. `Record<Color, T>` 맵을 추가하거나 수정할 때는 **8색 전부** 명시해야 TypeScript 에러가 없다. 영향 파일: `bill-setup.ts`, `game-engine.ts`, `Casino.tsx`(`COLOR_ORDER` 포함), `PlayerPanel.tsx`, `DiceRoll.tsx`(`PLAYER_BG` 포함). 새 색상을 추가하거나 기존 색상을 제거할 경우 이 파일들을 모두 함께 수정해야 한다.
 
 ### 15. `dice_count` snake_case 직렬화 경계
 

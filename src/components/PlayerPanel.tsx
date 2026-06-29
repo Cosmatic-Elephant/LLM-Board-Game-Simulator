@@ -5,6 +5,10 @@ const BORDER: Record<Color, string> = {
   yellow: "border-yellow-400",
   green:  "border-green-500",
   blue:   "border-blue-500",
+  orange: "border-orange-500",
+  purple: "border-purple-500",
+  pink:   "border-pink-400",
+  white:  "border-gray-200",
 };
 
 const DOT: Record<Color, string> = {
@@ -12,6 +16,10 @@ const DOT: Record<Color, string> = {
   yellow: "bg-yellow-400",
   green:  "bg-green-500",
   blue:   "bg-blue-500",
+  orange: "bg-orange-500",
+  purple: "bg-purple-500",
+  pink:   "bg-pink-400",
+  white:  "bg-gray-200",
 };
 
 const NAME_COLOR: Record<Color, string> = {
@@ -19,6 +27,10 @@ const NAME_COLOR: Record<Color, string> = {
   yellow: "text-yellow-300",
   green:  "text-green-400",
   blue:   "text-blue-400",
+  orange: "text-orange-400",
+  purple: "text-purple-400",
+  pink:   "text-pink-400",
+  white:  "text-gray-200",
 };
 
 interface PlayerPanelProps {

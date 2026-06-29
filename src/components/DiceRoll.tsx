@@ -15,6 +15,10 @@ const PLAYER_BG: Record<string, string> = {
   yellow: "bg-yellow-400",
   green:  "bg-green-500",
   blue:   "bg-blue-500",
+  orange: "bg-orange-500",
+  purple: "bg-purple-500",
+  pink:   "bg-pink-400",
+  white:  "bg-gray-200",
 };
 
 interface DieProps {

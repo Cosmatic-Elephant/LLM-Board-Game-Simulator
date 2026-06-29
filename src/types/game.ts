@@ -1,6 +1,6 @@
 // ─── Primitives ───────────────────────────────────────────────────────────────
 
-export type Color = "red" | "yellow" | "green" | "blue";
+export type Color = "red" | "yellow" | "green" | "blue" | "orange" | "purple" | "pink" | "white";
 
 export type CasinoNumber = 1 | 2 | 3 | 4 | 5 | 6;
 

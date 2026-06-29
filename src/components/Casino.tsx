@@ -7,6 +7,10 @@ const PLAYER_SQ: Record<Color, string> = {
   yellow: "bg-yellow-400",
   green:  "bg-green-500",
   blue:   "bg-blue-500",
+  orange: "bg-orange-500",
+  purple: "bg-purple-500",
+  pink:   "bg-pink-400",
+  white:  "bg-gray-200",
 };
 
 const BILL_COLOR: Record<number, string> = {
@@ -22,7 +26,7 @@ const BILL_COLOR: Record<number, string> = {
   100000: "#F9E74A",
 };
 
-const COLOR_ORDER: Color[] = ["red", "yellow", "green", "blue"];
+const COLOR_ORDER: Color[] = ["red", "yellow", "green", "blue", "orange", "purple", "pink", "white"];
 
 interface CasinoProps {
   number: number;

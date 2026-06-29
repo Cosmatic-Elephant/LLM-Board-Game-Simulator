@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Las Vegas Simulator",
+  title: "LLM 보드게임",
   description: "Las Vegas board game simulator with LLM players",
 };
 

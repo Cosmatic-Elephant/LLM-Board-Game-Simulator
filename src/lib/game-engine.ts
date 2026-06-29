@@ -51,7 +51,7 @@ export function getValidActions(roll: number[]): Action[] {
 }
 
 function emptyDice(): Record<Color, number> {
-  return { red: 0, yellow: 0, green: 0, blue: 0 };
+  return { red: 0, yellow: 0, green: 0, blue: 0, orange: 0, purple: 0, pink: 0, white: 0 };
 }
 
 function createEmptyCasinos(): Record<CasinoNumber, CasinoState> {

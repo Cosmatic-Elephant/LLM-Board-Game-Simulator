@@ -353,24 +353,75 @@ LLM 턴 중 인간 조작 UI가 차단되고, hover 하이라이팅은 유지된
 
 ---
 
-## 다음 세션에서 이어할 작업
+---
 
-### 우선순위 높음
+## 2026-06-19 — 세션 7 (완료)
 
-1. **로비 페이지** (`src/app/page.tsx` 전면 재작성)
-   - `"use client"` 컴포넌트
-   - state: `playerCount` (2|3|4), 슬롯별 `{ isLLM, modelId }` 배열
-   - 플레이어 수 선택 버튼 → 해당 수만큼 행 표시
-   - 각 행: 색상 dot + 이름 + 인간/LLM 토글 + (LLM 선택 시) 모델 ID 입력
-   - 시작 버튼: `PlayerConfig[]` 빌드 → `sessionStorage("las-vegas-player-config")` 저장 → `/game` 이동
-   - 완료 후 game/page.tsx의 `// TEMP` 더미 블록 삭제
+### 완료한 작업
 
-2. **랜덤 시작 플레이어** (`src/app/game/page.tsx`)
-   - 마운트 시 / `handleNextRound` / `handleRestart` 모두 `Math.floor(Math.random() * players.length)` 적용 (현재 0 고정)
+#### 라운드 시작 플레이어 랜덤 섞기 (`src/app/game/page.tsx`)
 
-3. **handleRestart 수정** (`src/app/game/page.tsx`)
-   - 현재: activeColors 하드코딩 `["red","yellow","green","blue"]`, `INITIAL_PLAYERS` 사용
-   - 변경: `initialPlayersRef.current`에서 activeColors·players 모두 산출
+- **`shufflePlayers(players, humanFirst)` 함수** — Fisher-Yates 셔플, `humanFirst=true` 시 인덱스 0이 LLM이면 첫 번째 인간과 스왑
+- 마운트 `useEffect`, `handleNextRound`, `handleRestart` 모두 `shufflePlayers` 통과
+
+#### 나가기 플로팅 버튼 (`src/app/game/page.tsx`)
+
+- `fixed right-4 bottom-28` 원형 버튼 + `exit.png` 아이콘
+- 클릭 시 "메인 화면으로 돌아가시겠습니까?" 확인 팝업 노출
+
+#### 로비 페이지 전면 재작성 (`src/app/page.tsx`)
+
+- 브라우저 탭 타이틀: `LLM 보드게임` (layout.tsx)
+- 홈 화면: **게임 변경** + **게임 시작** 버튼 나란히, 설명 문구 "주사위를 굴려서 베팅하는 보드게임"
+- **게임 시작 버튼 → 설정 팝업** 노출
+  - 플레이어 슬롯 4개: 색상 / 이름(또는 모델) / AI 토글
+  - 게임 설정: 사람이 먼저 플레이 토글, 지폐 배치 커트라인 셀렉트박스
+  - 하단 버튼: **기본값으로** / **튜토리얼** / **게임 시작**
+- **가드레일**
+  - 색상 중복 방지: 다른 슬롯이 선택한 색상은 `ColorSelect`에서 disabled 처리
+  - 빈 이름 자동 채움: AI 토글 off인 슬롯 이름이 비어있으면 `플레이어 n`으로 채움
+  - 전원 AI 시 `humanFirst` 토글 비활성화(시스템상 `false` 처리, UI 값 유지)
+- **오버레이 닫힘 개선**: `mouseDownOutsideRef` 패턴 — 팝업 외부에서 mousedown + mouseup이 모두 발생한 경우에만 닫힘
+
+#### 색상 상수 추출 (`src/lib/constants.ts` 신규)
+
+- `PLAYER_COLORS` 배열 8색: `key` / `label(한글)` / `hex` 필드
+- `ColorKey` 타입 export
+
+#### Color 타입 8색 확장 (`src/types/game.ts`)
+
+- `"red" | "yellow" | "green" | "blue"` → 4색 추가: `"orange" | "purple" | "pink" | "white"`
+- 영향 파일: `bill-setup.ts`, `game-engine.ts`, `Casino.tsx`, `PlayerPanel.tsx`, `DiceRoll.tsx` 모두 갱신
+
+#### 커스텀 색상 드롭다운 (`ColorSelect`)
+
+- native `<select>`는 `<option>` 내 HTML 렌더 불가 → div 기반 완전 커스텀 드롭다운
+- 색상 원형 dot + 한글 이름 함께 표시, taken 색상 disabled 스타일 처리
+
+#### 로비 ↔ 게임 페이지 설정 연동
+
+- `las-vegas:playerConfig` / `las-vegas:gameSettings` 두 키로 **localStorage**에 저장
+- 팝업이 열릴 때 localStorage에서 불러와 적용; 설정 변경 시마다 자동 저장
+- **기본값으로** 버튼: DEFAULT_PLAYERS + humanFirst=true + cutline=50000, localStorage도 덮어씀
+- `distributeRound()`에 `cutline` 파라미터 추가 (기본값 50000)
+- `shufflePlayers()`에 `humanFirst: boolean` 파라미터 추가
+- game/page.tsx: 마운트 시 localStorage 읽어 플레이어 구성·설정 적용, fallback은 4색 기본 플레이어
+- `humanFirstRef` / `cutlineRef`로 ref 유지 — 라운드 재시작 시에도 설정값 보존
+
+#### 버그 수정
+
+- `Casino.tsx` `COLOR_ORDER`: 4색 → 8색 (새 색상 플레이어 주사위가 카지노에 미표시되던 문제)
+- `DiceRoll.tsx` `PLAYER_BG`: 4색 → 8색 (새 색상 플레이어 주사위가 모두 회색으로 보이던 문제)
+- `INITIAL_PLAYERS` 상수 제거: useEffect가 localStorage에서 읽으므로 불필요, fallback 인라인 처리
+
+---
+
+### 현재 상태
+
+로비 → 게임 전체 흐름 연결 완료. 플레이어 설정(색상·이름·AI 여부·모델)과 게임 설정(humanFirst·cutline)이 localStorage를 통해 게임 페이지에 전달된다.  
+`npx tsc --noEmit` 에러 없음 확인.
+
+---
 
 ### 미결 사항
 
@@ -378,3 +429,4 @@ LLM 턴 중 인간 조작 UI가 차단되고, hover 하이라이팅은 유지된
 - [ ] `reasoning` 문자열을 화면에 표시할지 여부 (디버깅 목적)
 - [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
 - [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기
+- [ ] 플레이어 이름이 게임 보드 UI에 미표시 — `PLAYER_LABELS`가 하드코딩("플레이어 1~4") 상태

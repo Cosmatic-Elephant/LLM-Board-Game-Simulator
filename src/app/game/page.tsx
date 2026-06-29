@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import type { Action, Color, CasinoNumber, CasinoState, LLMGameState, PlayerConfig, PlayerState, ScoringStep } from "@/types/game";
+import Image from "next/image";
+import type { Action, Color, CasinoNumber, CasinoState, LLMGameState, PlayerState, ScoringStep } from "@/types/game";
 import { createBillDeck, distributeRound } from "@/lib/bill-setup";
 import { computeScoringSteps } from "@/lib/scoring";
 import { isValidAction } from "@/lib/game-engine";
@@ -19,7 +20,11 @@ const SCORING_FADE_MS     = 400;  // base duration for every scoring animation s
 const LLM_ROLL_DELAY_MS   = 500;  // delay before LLM auto-roll
 const LLM_PLACE_DELAY_MS  = 500;  // delay before LLM API call (post-roll)
 
-const EMPTY_DICE = { red: 0, yellow: 0, green: 0, blue: 0 };
+const PLAYER_CONFIG_KEY   = "las-vegas:playerConfig";
+const GAME_SETTINGS_KEY   = "las-vegas:gameSettings";
+const DEFAULT_SETTINGS    = { humanFirst: true, cutline: 50000 };
+
+const EMPTY_DICE: Record<Color, number> = { red: 0, yellow: 0, green: 0, blue: 0, orange: 0, purple: 0, pink: 0, white: 0 };
 
 const EMPTY_CASINOS: Record<CasinoNumber, CasinoState> = {
   1: { bills: [], dice: { ...EMPTY_DICE } },
@@ -39,9 +44,22 @@ const INITIAL_PLAYERS: PlayerState[] = [
 
 const PLAYER_LABELS = ["플레이어 1", "플레이어 2", "플레이어 3", "플레이어 4"];
 
-const SESSION_KEY = "las-vegas-player-config";
-
 const CASINO_NUMBERS: CasinoNumber[] = [1, 2, 3, 4, 5, 6];
+
+function shufflePlayers(players: PlayerState[], humanFirst: boolean): PlayerState[] {
+  const arr = [...players];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  if (humanFirst && arr[0].isLLM) {
+    const firstHumanIdx = arr.findIndex((p) => !p.isLLM);
+    if (firstHumanIdx !== -1) {
+      [arr[0], arr[firstHumanIdx]] = [arr[firstHumanIdx], arr[0]];
+    }
+  }
+  return arr;
+}
 
 function generateRoll(count: number): number[] {
   return Array.from({ length: count }, () => Math.floor(Math.random() * 6) + 1)
@@ -97,35 +115,26 @@ export default function GamePage() {
   const placingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scoringAnim, setScoringAnim]         = useState<ScoringAnimState | null>(null);
   const scoringTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const [displayScores, setDisplayScores]     = useState<Record<Color, number>>({ red: 0, yellow: 0, green: 0, blue: 0 });
-  const finalScoresRef = useRef<Record<Color, number>>({ red: 0, yellow: 0, green: 0, blue: 0 });
+  const [displayScores, setDisplayScores]     = useState<Record<Color, number>>({ ...EMPTY_DICE });
+  const finalScoresRef = useRef<Record<Color, number>>({ ...EMPTY_DICE });
   const initialPlayersRef = useRef<PlayerState[]>(INITIAL_PLAYERS);
   const llmIsRunningRef   = useRef(false);
+  const humanFirstRef     = useRef(DEFAULT_SETTINGS.humanFirst);
+  const cutlineRef        = useRef(DEFAULT_SETTINGS.cutline);
   const [scoreDeltaPopups, setScoreDeltaPopups] = useState<Partial<Record<Color, { amount: number; key: number }>>>({});
+  const [showExitConfirm, setShowExitConfirm]   = useState(false);
 
   function triggerPreRoll() {
     setPreRollKey((k) => k + 1);
   }
 
   useEffect(() => {
-    // TEMP: dummy player config — remove when lobby page is implemented
-    sessionStorage.setItem(
-      SESSION_KEY,
-      JSON.stringify([
-        { color: "red",    isLLM: false, modelId: null },
-        { color: "yellow", isLLM: true,  modelId: "claude-sonnet-4-6" },
-        { color: "green",  isLLM: false, modelId: null },
-        { color: "blue",   isLLM: false, modelId: null },
-      ])
-    );
-    // END TEMP
-
-    const raw = sessionStorage.getItem(SESSION_KEY);
-    const configs = raw
-      ? (JSON.parse(raw) as Array<{ color: Color; isLLM: boolean; modelId: string | null }>)
+    const rawPlayers = localStorage.getItem(PLAYER_CONFIG_KEY);
+    const playerConfigs = rawPlayers
+      ? (JSON.parse(rawPlayers) as Array<{ color: Color; isLLM: boolean; modelId: string | null }>)
       : null;
-    const initialPlayers: PlayerState[] = configs
-      ? configs.map((c) => ({
+    const initialPlayers: PlayerState[] = playerConfigs
+      ? playerConfigs.map((c) => ({
           color: c.color,
           isLLM: c.isLLM,
           modelId: c.modelId ?? undefined,
@@ -134,11 +143,19 @@ export default function GamePage() {
         }))
       : INITIAL_PLAYERS;
 
+    const rawSettings = localStorage.getItem(GAME_SETTINGS_KEY);
+    const settings = rawSettings
+      ? (JSON.parse(rawSettings) as { humanFirst: boolean; cutline: number })
+      : DEFAULT_SETTINGS;
+
+    humanFirstRef.current = settings.humanFirst;
+    cutlineRef.current    = settings.cutline;
+
     initialPlayersRef.current = initialPlayers;
-    setPlayers(initialPlayers);
+    setPlayers(shufflePlayers(initialPlayers, settings.humanFirst));
 
     const activeColors = initialPlayers.map((p) => p.color);
-    const result = distributeRound(createBillDeck(), activeColors);
+    const result = distributeRound(createBillDeck(), activeColors, settings.cutline);
     if (result) {
       setCasinos(result.casinos);
       setBillDeck(result.remainingDeck);
@@ -313,7 +330,7 @@ export default function GamePage() {
     );
     const finalDeck = [...capturedBillDeck, ...scoreStep.returnedBills];
     setBillDeck(finalDeck);
-    const nextDist = distributeRound(finalDeck, activeColors);
+    const nextDist = distributeRound(finalDeck, activeColors, cutlineRef.current);
     setNextRound(nextDist ? { casinos: nextDist.casinos, deck: nextDist.remainingDeck } : null);
 
     // ── Initialize display scores from pre-update values ────────────────────
@@ -539,9 +556,10 @@ export default function GamePage() {
 
   function handleNextRound() {
     if (!nextRound) return;
+    const shuffled = shufflePlayers(players.map((p) => ({ ...p, diceRemaining: 8 })), humanFirstRef.current);
     setCasinos(nextRound.casinos);
     setBillDeck(nextRound.deck);
-    setPlayers((prev) => prev.map((p) => ({ ...p, diceRemaining: 8 })));
+    setPlayers(shuffled);
     setRound((r) => r + 1);
     setTurn(0);
     setCurrentPlayerIndex(0);
@@ -572,11 +590,14 @@ export default function GamePage() {
     setExitingCasino(null);
     setIsPlacingDice(false);
     llmIsRunningRef.current = false;
-    const dist = distributeRound(createBillDeck(), ["red", "yellow", "green", "blue"]);
+    const restorePlayers = initialPlayersRef.current.map((p) => ({ ...p, score: 0, diceRemaining: 8 }));
+    const shuffled = shufflePlayers(restorePlayers, humanFirstRef.current);
+    const activeColors = shuffled.map((p) => p.color);
+    const dist = distributeRound(createBillDeck(), activeColors, cutlineRef.current);
     if (!dist) return;
     setCasinos(dist.casinos);
     setBillDeck(dist.remainingDeck);
-    setPlayers(INITIAL_PLAYERS);
+    setPlayers(shuffled);
     setCurrentPlayerIndex(0);
     setRound(1);
     setTurn(0);
@@ -819,6 +840,44 @@ export default function GamePage() {
           );
         })}
       </section>
+
+      {/* ── Floating exit button ────────────────────────────────────────── */}
+      <button
+        className="fixed right-4 bottom-28 w-12 h-12 rounded-full bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 border border-zinc-600 flex items-center justify-center transition-colors shadow-lg"
+        onClick={() => setShowExitConfirm(true)}
+        aria-label="나가기"
+      >
+        <Image src="/img/exit.png" alt="나가기" width={24} height={24} />
+      </button>
+
+      {/* ── Exit confirmation modal ──────────────────────────────────────── */}
+      {showExitConfirm && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+          onClick={() => setShowExitConfirm(false)}
+        >
+          <div
+            className="bg-zinc-800 border border-zinc-600 rounded-2xl px-8 py-6 flex flex-col items-center gap-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="text-sm font-semibold text-white">메인 화면으로 돌아가시겠습니까?</span>
+            <div className="flex gap-3">
+              <button
+                className="px-6 py-2.5 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl text-sm font-bold transition-colors"
+                onClick={handleGoMain}
+              >
+                예
+              </button>
+              <button
+                className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl text-sm font-bold transition-colors"
+                onClick={() => setShowExitConfirm(false)}
+              >
+                아니오
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </main>
   );
