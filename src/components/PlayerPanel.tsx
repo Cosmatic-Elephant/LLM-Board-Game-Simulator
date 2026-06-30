@@ -44,20 +44,20 @@ export function PlayerPanel({ player, label, isActive, displayScore }: PlayerPan
   return (
     <div
       className={[
-        "flex flex-col gap-1.5 px-5 py-3 rounded-xl border-2 min-w-[150px] transition-all duration-200",
+        "flex flex-col gap-1.5 px-5 py-3 rounded-xl border-2 w-[150px] transition-all duration-200",
         isActive
           ? `bg-gray-700 ${BORDER[player.color]} shadow-lg -translate-y-1.5`
           : "bg-gray-900/80 border-gray-800",
       ].join(" ")}
     >
       {/* Name row */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 overflow-hidden">
         <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${DOT[player.color]}`} />
-        <span className={`text-sm font-bold ${isActive ? NAME_COLOR[player.color] : "text-gray-400"}`}>
+        <span className={`text-sm font-bold truncate min-w-0 flex-1 ${isActive ? NAME_COLOR[player.color] : "text-gray-400"}`}>
           {label}
         </span>
         {player.isLLM && (
-          <span className="ml-auto text-xs text-gray-600">AI</span>
+          <span className="flex-shrink-0 text-xs text-gray-600">AI</span>
         )}
       </div>
 

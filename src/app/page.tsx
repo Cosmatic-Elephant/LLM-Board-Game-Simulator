@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PLAYER_COLORS, type ColorKey } from "@/lib/constants";
 
-const MODEL_OPTIONS = ["claude-sonnet-4-6", "gpt-4o", "gemini-pro"] as const;
+const MODEL_OPTIONS = ["claude-sonnet-4-6", "gpt-4o", "gemini-pro", "깡통"] as const;
 const CUTOFF_OPTIONS = [50000, 60000, 70000, 80000, 90000, 100000];
 
 const STORAGE_PLAYERS_KEY  = "las-vegas:playerConfig";
@@ -142,7 +142,14 @@ function loadFromStorage(): { players: PlayerSlot[]; humanFirst: boolean; cutoff
     const rawPlayers  = localStorage.getItem(STORAGE_PLAYERS_KEY);
     const rawSettings = localStorage.getItem(STORAGE_SETTINGS_KEY);
     if (!rawPlayers || !rawSettings) return null;
-    const savedPlayers  = JSON.parse(rawPlayers) as PlayerSlot[];
+    const raw = JSON.parse(rawPlayers) as Array<Record<string, unknown>>;
+    // Normalize both lobby format (isAI) and game format (isLLM), and modelId: null
+    const savedPlayers: PlayerSlot[] = raw.map((p) => ({
+      color: (p.color as ColorKey) ?? "red",
+      name: (p.name as string | undefined) ?? "",
+      isAI: Boolean(p.isAI ?? p.isLLM),
+      modelId: (p.modelId as string | null | undefined) ?? MODEL_OPTIONS[0],
+    }));
     const savedSettings = JSON.parse(rawSettings) as { humanFirst: boolean; cutline: number };
     return { players: savedPlayers, humanFirst: savedSettings.humanFirst, cutoff: savedSettings.cutline };
   } catch {
@@ -203,7 +210,6 @@ export default function LobbyPage() {
     const filled = players.map((p, i) =>
       !p.isAI && p.name.trim() === "" ? { ...p, name: `플레이어 ${i + 1}` } : p
     );
-    setPlayers(filled);
 
     const colorMeta = Object.fromEntries(PLAYER_COLORS.map((c) => [c.key, c]));
     const playerConfig = filled.map((p) => ({

@@ -148,6 +148,14 @@ LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 
 
 `Action` 타입(내부)은 camelCase `diceCount`를 사용하고, `LLMResponse["action"]`(외부 API 경계)는 snake_case `dice_count`를 사용한다. `/api/llm-action` route.ts는 변환된 `Action` 객체가 아니라 `response.action`(LLMResponse)을 그대로 JSON 반환해야 한다. 클라이언트(page.tsx)는 `data.action.dice_count`로 읽는다. LLM이 camelCase로 응답할 경우를 대비해 `parseResponse()`에서 `diceCount → dice_count` 정규화 처리가 있다.
 
+### 18. 말풍선 시스템 — BubbleTimerInfo 타이머 패턴
+
+`BubbleTimerInfo { timerId | null, remainingMs, startedAt }` 구조를 `bubbleTimersRef`(Ref)로 관리한다. hover 시 `timerId`를 clear하고 `remainingMs - elapsed`를 저장(`timerId = null`), mouse leave 시 남은 시간으로 타이머 재시작. `showBubble`은 기존 타이머(null 포함)를 무조건 덮어쓰므로 hover 중 재트리거 시에도 즉시 새 말풍선으로 교체된다. `handleCasinoSelect(n, reasoning?)`는 optional reasoning 파라미터를 받으며, LLM effect가 API 응답의 reasoning을 이 경로로 전달한다.
+
+### 19. LLM single valid action 최적화
+
+`valid_actions.length === 1`(롤 결과 눈금이 하나뿐)이면 `/api/llm-action` 호출을 생략하고 즉시 해당 액션을 선택한다. `SINGLE_ACTION_PHRASES` 배열(5개 한국어 문구) 중 랜덤으로 reasoning을 생성해 말풍선에 표시. `깡통` 모델 분기보다 앞에 위치하므로 모든 LLM 플레이어에 일괄 적용된다.
+
 ---
 
 ## 환경변수

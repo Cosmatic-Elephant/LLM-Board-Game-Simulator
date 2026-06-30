@@ -426,7 +426,60 @@ LLM 턴 중 인간 조작 UI가 차단되고, hover 하이라이팅은 유지된
 ### 미결 사항
 
 - [ ] q키 테스트 단축키 — 최종 배포 전 삭제 필요 (`// TEST ONLY` 주석 위치)
-- [ ] `reasoning` 문자열을 화면에 표시할지 여부 (디버깅 목적)
 - [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
 - [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기
-- [ ] 플레이어 이름이 게임 보드 UI에 미표시 — `PLAYER_LABELS`가 하드코딩("플레이어 1~4") 상태
+
+---
+
+---
+
+## 2026-06-30 — 세션 8
+
+### 완료한 작업
+
+#### 말풍선(Speech Bubble) 시스템 (`src/app/game/page.tsx`, `src/app/globals.css`)
+
+- 베팅 직후 해당 플레이어 패널 위에 말풍선 3초간 표시
+  - 인간/깡통: "n번 카지노에 베팅했어요."
+  - LLM: "n번 카지노에 베팅했어요. {reasoning}"
+- `BubbleTimerInfo { timerId | null, remainingMs, startedAt }` 구조를 `bubbleTimersRef`(Ref)로 관리
+- **Hover-pause**: 마우스를 올리면 카운트다운 일시정지, 벗어나면 남은 시간부터 재개
+- hover 중 같은 플레이어의 말풍선을 다시 띄울 경우 즉시 교체
+- `handleCasinoSelect(n, reasoning?)` — optional reasoning 파라미터 추가, LLM effect에서 전달
+- 정산 시작·스킵·다음 라운드·재시작 시 말풍선 전부 클리어
+- `@keyframes bubble-in` CSS 추가 (opacity + translateY 슬라이드인 200ms)
+
+#### LLM parseResponse 버그 수정 (`src/lib/llm-client.ts`)
+
+- **원인**: `max_tokens: 150`이 너무 낮아 JSON 출력 전 산문 분석 중에 응답이 잘림
+- `{[\s\S]*}` 정규식으로 raw text에서 JSON 객체만 추출해 앞뒤 산문을 허용하도록 개선
+- 파싱 실패 시 `console.warn`으로 raw text 전체 로깅 추가
+
+#### LLM 시스템 프롬프트 개선 (`src/lib/llm-client.ts`, `DESIGN.md`)
+
+세션 전반에 걸쳐 프롬프트를 여러 차례 수정했다. 공통된 방향은 두 가지였다. 하나는 **LLM이 JSON 앞에 장황한 분석 텍스트를 쓰지 않도록** 형식 지시를 강화하는 것, 다른 하나는 **전략적 판단 근거를 프롬프트 안에 심어** 무작위에 가까운 선택을 줄이는 것이다.
+
+- `max_tokens` 150 → 512 → 700으로 단계적 조정 (너무 낮으면 JSON이 잘리고, 형식 지시 강화와 병행해 최적값 탐색)
+- Output Format 섹션 재작성: JSON만 출력하라는 지시 강화, reasoning은 1-2문장·한국어로 제한, "빠르게 직관적으로 결정하라" 톤으로 교체
+- **Strategy 섹션 신규 추가**: Dice efficiency / Spreading risk / Tie exploitation 세 가지 원칙. Tie exploitation은 "타이 상태 플레이어는 이미 탈락이므로 경쟁 상대가 아님"을 명확히 기술
+
+#### LLM single valid action 최적화 (`src/app/game/page.tsx`)
+
+- `valid_actions.length === 1`(롤 결과 눈금이 하나뿐)이면 `/api/llm-action` 호출 생략, 즉시 선택
+- `SINGLE_ACTION_PHRASES` 5개 한국어 문구 중 랜덤 선택해 reasoning으로 말풍선 표시
+- `깡통` 모델 분기보다 앞에 위치하므로 모든 LLM 플레이어에 일괄 적용
+
+---
+
+### 현재 상태
+
+말풍선 시스템, LLM 프롬프트 개선, 단일 액션 최적화 모두 구현 완료.  
+LLM이 reasoning을 말풍선에 한국어로 표시하며 동작 확인.
+
+---
+
+### 미결 사항
+
+- [ ] q키 테스트 단축키 — 최종 배포 전 삭제 필요 (`// TEST ONLY` 주석 위치)
+- [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
+- [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기

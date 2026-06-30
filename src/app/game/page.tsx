@@ -36,15 +36,21 @@ const EMPTY_CASINOS: Record<CasinoNumber, CasinoState> = {
 };
 
 const INITIAL_PLAYERS: PlayerState[] = [
-  { color: "red",    isLLM: false, score: 0, diceRemaining: 8 },
-  { color: "yellow", isLLM: false, score: 0, diceRemaining: 8 },
-  { color: "green",  isLLM: false, score: 0, diceRemaining: 8 },
-  { color: "blue",   isLLM: false, score: 0, diceRemaining: 8 },
+  { color: "red",    name: "플레이어 1", isLLM: false, score: 0, diceRemaining: 8 },
+  { color: "yellow", name: "플레이어 2", isLLM: false, score: 0, diceRemaining: 8 },
+  { color: "green",  name: "플레이어 3", isLLM: false, score: 0, diceRemaining: 8 },
+  { color: "blue",   name: "플레이어 4", isLLM: false, score: 0, diceRemaining: 8 },
 ];
 
-const PLAYER_LABELS = ["플레이어 1", "플레이어 2", "플레이어 3", "플레이어 4"];
-
 const CASINO_NUMBERS: CasinoNumber[] = [1, 2, 3, 4, 5, 6];
+
+const SINGLE_ACTION_PHRASES = [
+  "이게 제 마지막 패 입니다. 행운을 빌어요!",
+  "선택의 여지가 없으니, 그냥 가보겠습니다.",
+  "여기 말곤 갈 데가 없네요.",
+  "고민할 필요도 없었어요, 여기뿐이라.",
+  "마지막 주사위, 여기에 걸어볼게요.",
+];
 
 function shufflePlayers(players: PlayerState[], humanFirst: boolean): PlayerState[] {
   const arr = [...players];
@@ -73,6 +79,12 @@ function generateRoll(count: number): number[] {
 type TurnPhase = "pre-roll" | "rolling" | "post-roll";
 
 type NextRound = { casinos: Record<CasinoNumber, CasinoState>; deck: number[] };
+
+interface BubbleTimerInfo {
+  timerId: ReturnType<typeof setTimeout> | null;
+  remainingMs: number;
+  startedAt: number;
+}
 
 // ── Scoring animation state ──────────────────────────────────────────────────
 
@@ -123,21 +135,61 @@ export default function GamePage() {
   const cutlineRef        = useRef(DEFAULT_SETTINGS.cutline);
   const [scoreDeltaPopups, setScoreDeltaPopups] = useState<Partial<Record<Color, { amount: number; key: number }>>>({});
   const [showExitConfirm, setShowExitConfirm]   = useState(false);
+  const [bubbles, setBubbles] = useState<Partial<Record<Color, { casinoNumber: CasinoNumber; reasoning: string; key: number }>>>({});
+  const bubbleTimersRef = useRef<Partial<Record<Color, BubbleTimerInfo>>>({});
 
   function triggerPreRoll() {
     setPreRollKey((k) => k + 1);
   }
 
+  const BUBBLE_DURATION_MS = 3000;
+
+  function dismissBubble(color: Color) {
+    setBubbles((prev) => { const next = { ...prev }; delete next[color]; return next; });
+    delete bubbleTimersRef.current[color];
+  }
+
+  function startBubbleTimer(color: Color, remainingMs: number) {
+    const timerId = setTimeout(() => dismissBubble(color), remainingMs);
+    bubbleTimersRef.current[color] = { timerId, remainingMs, startedAt: Date.now() };
+  }
+
+  function showBubble(color: Color, casinoNumber: CasinoNumber, reasoning: string) {
+    const existing = bubbleTimersRef.current[color];
+    if (existing?.timerId) clearTimeout(existing.timerId);
+    setBubbles((prev) => ({
+      ...prev,
+      [color]: { casinoNumber, reasoning, key: (prev[color]?.key ?? 0) + 1 },
+    }));
+    startBubbleTimer(color, BUBBLE_DURATION_MS);
+  }
+
+  function handleBubbleMouseEnter(color: Color) {
+    const info = bubbleTimersRef.current[color];
+    if (!info || info.timerId === null) return;
+    const elapsed = Date.now() - info.startedAt;
+    const remaining = Math.max(0, info.remainingMs - elapsed);
+    clearTimeout(info.timerId);
+    bubbleTimersRef.current[color] = { timerId: null, remainingMs: remaining, startedAt: Date.now() };
+  }
+
+  function handleBubbleMouseLeave(color: Color) {
+    const info = bubbleTimersRef.current[color];
+    if (!info || info.timerId !== null) return;
+    startBubbleTimer(color, info.remainingMs);
+  }
+
   useEffect(() => {
     const rawPlayers = localStorage.getItem(PLAYER_CONFIG_KEY);
     const playerConfigs = rawPlayers
-      ? (JSON.parse(rawPlayers) as Array<{ color: Color; isLLM: boolean; modelId: string | null }>)
+      ? (JSON.parse(rawPlayers) as Array<{ color: Color; isLLM: boolean; modelId: string | null; name?: string }>)
       : null;
     const initialPlayers: PlayerState[] = playerConfigs
-      ? playerConfigs.map((c) => ({
+      ? playerConfigs.map((c, i) => ({
           color: c.color,
           isLLM: c.isLLM,
           modelId: c.modelId ?? undefined,
+          name: c.isLLM ? (c.modelId ?? `AI ${i + 1}`) : (c.name?.trim() || `플레이어 ${i + 1}`),
           score: 0,
           diceRemaining: 8,
         }))
@@ -170,6 +222,7 @@ export default function GamePage() {
       if (rollingTimeoutRef.current) clearTimeout(rollingTimeoutRef.current);
       if (placingTimerRef.current) clearTimeout(placingTimerRef.current);
       for (const t of scoringTimersRef.current) clearTimeout(t);
+      for (const info of Object.values(bubbleTimersRef.current)) { if (info?.timerId) clearTimeout(info.timerId); }
     };
   }, []);
 
@@ -208,7 +261,21 @@ export default function GamePage() {
           return;
         }
 
-        const fallbackCasino = validFaceEntries[0].face;
+        const randomCasino = validFaceEntries[Math.floor(Math.random() * validFaceEntries.length)].face;
+
+        // Single valid action — skip API call, use preset phrase
+        if (validFaceEntries.length === 1) {
+          const phrase = SINGLE_ACTION_PHRASES[Math.floor(Math.random() * SINGLE_ACTION_PHRASES.length)];
+          if (!cancelled) handleCasinoSelect(validFaceEntries[0].face, phrase);
+          llmIsRunningRef.current = false;
+          return;
+        }
+
+        if (currentPlayer.modelId === "깡통") {
+          if (!cancelled) handleCasinoSelect(randomCasino);
+          llmIsRunningRef.current = false;
+          return;
+        }
 
         const payload: LLMGameState = {
           game: { round, turn },
@@ -255,10 +322,10 @@ export default function GamePage() {
             throw new Error("LLM returned an action outside valid_actions");
           }
 
-          if (!cancelled) handleCasinoSelect(action.casino);
+          if (!cancelled) handleCasinoSelect(action.casino, data.reasoning ?? "");
         } catch (err) {
           console.error("[LLM] action failed, using fallback:", err);
-          if (!cancelled) handleCasinoSelect(fallbackCasino);
+          if (!cancelled) handleCasinoSelect(randomCasino);
         } finally {
           llmIsRunningRef.current = false;
         }
@@ -310,6 +377,9 @@ export default function GamePage() {
     for (const t of scoringTimersRef.current) clearTimeout(t);
     scoringTimersRef.current = [];
     setScoreDeltaPopups({});
+    setBubbles({});
+    for (const info of Object.values(bubbleTimersRef.current)) { if (info?.timerId) clearTimeout(info.timerId); }
+    bubbleTimersRef.current = {};
 
     const casinoSteps = steps.filter(
       (s): s is Extract<ScoringStep, { kind: "casino-reveal" }> =>
@@ -465,6 +535,7 @@ export default function GamePage() {
     setCasinos(EMPTY_CASINOS);
     setDisplayScores(finalScoresRef.current);
     setScoreDeltaPopups({});
+    setBubbles({});
     setRoundEnded(true);
   }
 
@@ -493,9 +564,10 @@ export default function GamePage() {
     }, ROLL_DURATION_MS);
   }
 
-  function handleCasinoSelect(n: CasinoNumber) {
+  function handleCasinoSelect(n: CasinoNumber, reasoning?: string) {
     if (roundEnded || isPlacingDice) return;
     const count = rollCounts[n];
+    showBubble(current.color, n, reasoning ?? "");
 
     // Compute all next states synchronously before starting animation
     const nextCasinos: Record<CasinoNumber, CasinoState> = {
@@ -567,6 +639,7 @@ export default function GamePage() {
     setNextRound(null);
     setRoll([]);
     setTurnPhase("pre-roll");
+    setBubbles({});
     llmIsRunningRef.current = false;
     triggerPreRoll();
   }
@@ -606,6 +679,7 @@ export default function GamePage() {
     setRoundEnded(false);
     setNextRound(null);
     setGameOver(false);
+    setBubbles({});
     triggerPreRoll();
   }
 
@@ -700,9 +774,8 @@ export default function GamePage() {
                 {(() => {
                   const maxScore = Math.max(...players.map((p) => p.score));
                   const names = players
-                    .map((p, i) => ({ score: p.score, label: PLAYER_LABELS[i] }))
-                    .filter(({ score }) => score === maxScore)
-                    .map(({ label }) => label)
+                    .filter((p) => p.score === maxScore)
+                    .map((p) => p.name ?? p.color)
                     .join(", ");
                   return (
                     <span className="text-base font-bold text-yellow-300">
@@ -830,12 +903,34 @@ export default function GamePage() {
                   생각 중...
                 </p>
               )}
-              <PlayerPanel
-                player={player}
-                label={PLAYER_LABELS[i]}
-                isActive={isActive}
-                displayScore={scoringAnim !== null ? displayScores[player.color] : undefined}
-              />
+              <div className="relative">
+                {bubbles[player.color] && (
+                  <div
+                    key={bubbles[player.color]!.key}
+                    className="absolute bottom-full mb-3 w-[150px] z-10"
+                    style={{ animation: "bubble-in 200ms ease-out forwards" }}
+                    onMouseEnter={() => handleBubbleMouseEnter(player.color)}
+                    onMouseLeave={() => handleBubbleMouseLeave(player.color)}
+                  >
+                    <div className="relative bg-zinc-700 border border-zinc-500 rounded-xl px-3 py-2 shadow-lg">
+                      <p className="text-xs text-gray-200 leading-relaxed break-words">
+                        {bubbles[player.color]!.casinoNumber}번 카지노에 베팅했어요.
+                        {bubbles[player.color]!.reasoning && ` ${bubbles[player.color]!.reasoning}`}
+                      </p>
+                      {/* 말풍선 꼬리 — 테두리 레이어 */}
+                      <div style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid #71717a" }} />
+                      {/* 말풍선 꼬리 — 채우기 레이어 */}
+                      <div style={{ position: "absolute", bottom: -7, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "7px solid transparent", borderRight: "7px solid transparent", borderTop: "7px solid #3f3f46" }} />
+                    </div>
+                  </div>
+                )}
+                <PlayerPanel
+                  player={player}
+                  label={player.name ?? `플레이어 ${i + 1}`}
+                  isActive={isActive}
+                  displayScore={scoringAnim !== null ? displayScores[player.color] : undefined}
+                />
+              </div>
             </div>
           );
         })}

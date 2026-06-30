@@ -9,6 +9,7 @@ export type CasinoNumber = 1 | 2 | 3 | 4 | 5 | 6;
 export interface PlayerConfig {
   color: Color;
   isLLM: boolean;
+  name?: string;
   /** e.g. "claude-sonnet-4-6", "gpt-4o". Required when isLLM is true. */
   modelId?: string;
 }

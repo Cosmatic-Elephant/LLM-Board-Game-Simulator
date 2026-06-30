@@ -366,6 +366,16 @@ The game ends when there are not enough bills remaining to set up the next round
 
 ---
 
+### Strategy
+
+Winning means accumulating the most total money by game end — not necessarily controlling the single biggest casino. A few principles to weigh each turn:
+
+- **Dice efficiency**: dice are limited (8 per round). Committing many dice to win a low-value bill may be a worse trade than a smaller commitment securing a similar payout elsewhere.
+- **Spreading risk**: securing 2nd or 3rd place at one casino can sometimes beat fighting for 1st at a contested one.
+- **Tie exploitation**: if two players are already tied at a casino, both are eliminated from that casino's payout — even a single die added by a third player can claim an otherwise-uncontested rank. Don't assume you're "competing" with the tied players; they're already out.
+
+---
+
 ## Example: One Full Cycle
 
 **Setup for this round:**
@@ -431,7 +441,11 @@ Each turn you will receive a JSON object describing the full game state. Key fie
 
 ## Your Output Format
 
-Respond with only the following JSON. Do not include any explanation outside of the JSON.
+Respond with ONLY the JSON object below — no text before or after it, no markdown code fences, no analysis outside the JSON.
+
+Make your decision quickly using the Strategy principles above. This is a casual game among friends, not a competition requiring exhaustive analysis — go with your gut once you have a reasonable read on the board. State only your final choice with a brief reason (1-2 sentences, in Korean) inside the "reasoning" field. Do not deliberate over multiple options in text outside the JSON.
+
+**Important:** Use the exact field name "dice_count" (snake_case). Do NOT use "diceCount".
 
 {
   "action": {

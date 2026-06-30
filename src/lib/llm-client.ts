@@ -59,6 +59,16 @@ The game ends when there are not enough bills remaining to set up the next round
 
 ---
 
+### Strategy
+
+Winning means accumulating the most total money by game end — not necessarily controlling the single biggest casino. A few principles to weigh each turn:
+
+- **Dice efficiency**: dice are limited (8 per round). Committing many dice to win a low-value bill may be a worse trade than a smaller commitment securing a similar payout elsewhere.
+- **Spreading risk**: securing 2nd or 3rd place at one casino can sometimes beat fighting for 1st at a contested one.
+- **Tie exploitation**: if two players are already tied at a casino, both are eliminated from that casino's payout — even a single die added by a third player can claim an otherwise-uncontested rank. Don't assume you're "competing" with the tied players; they're already out.
+
+---
+
 ## Your Input Format
 
 Each turn you will receive a JSON object describing the full game state. Key fields:
@@ -70,7 +80,9 @@ Each turn you will receive a JSON object describing the full game state. Key fie
 
 ## Your Output Format
 
-Respond with ONLY the following JSON. Do not include any explanation outside of the JSON block.
+Respond with ONLY the JSON object below — no text before or after it, no markdown code fences, no analysis outside the JSON.
+
+Make your decision quickly using the Strategy principles above. This is a casual game among friends, not a competition requiring exhaustive analysis — go with your gut once you have a reasonable read on the board. State only your final choice with a brief reason (1-2 sentences, in Korean) inside the "reasoning" field. Do not deliberate over multiple options in text outside the JSON.
 
 **Important:** Use the exact field name "dice_count" (snake_case). Do NOT use "diceCount".
 
@@ -95,7 +107,7 @@ async function callAnthropic(
 
   const message = await client.messages.create({
     model: modelId,
-    max_tokens: 150,
+    max_tokens: 700,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: JSON.stringify(payload, null, 2) }],
   });
@@ -114,7 +126,7 @@ async function callOpenAI(
 
   const completion = await client.chat.completions.create({
     model: modelId,
-    max_tokens: 150,
+    max_tokens: 700,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: JSON.stringify(payload, null, 2) },
@@ -135,7 +147,7 @@ async function callGoogle(
   const response = await client.models.generateContent({
     model: modelId,
     contents: JSON.stringify(payload, null, 2),
-    config: { systemInstruction: SYSTEM_PROMPT, maxOutputTokens: 150 },
+    config: { systemInstruction: SYSTEM_PROMPT, maxOutputTokens: 700 },
   });
 
   const text = response.text ?? "";
@@ -150,8 +162,12 @@ async function callGoogle(
  */
 function parseResponse(raw: string, payload: LLMGameState): LLMResponse {
   try {
-    // Strip markdown code fences if present
-    const jsonText = raw.replace(/```(?:json)?\s*([\s\S]*?)```/g, "$1").trim();
+    // Strip markdown code fences if present, then extract the outermost {...} object
+    // to tolerate surrounding prose text that some models emit despite the prompt.
+    const stripped = raw.replace(/```(?:json)?\s*([\s\S]*?)```/g, "$1").trim();
+    const objMatch = stripped.match(/\{[\s\S]*\}/);
+    if (!objMatch) throw new Error("no JSON object found");
+    const jsonText = objMatch[0];
     const parsed = JSON.parse(jsonText) as Record<string, unknown>;
 
     // Normalize camelCase diceCount → snake_case dice_count when LLM ignores the prompt
@@ -167,8 +183,9 @@ function parseResponse(raw: string, payload: LLMGameState): LLMResponse {
     );
 
     if (isValid) return response;
-  } catch {
-    // Fall through to fallback
+  } catch (e) {
+    console.warn("[LLM] parseResponse failed — raw text below:", e);
+    console.warn(raw);
   }
 
   // Fallback: pick the first valid action
