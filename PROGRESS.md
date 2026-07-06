@@ -483,3 +483,87 @@ LLM이 reasoning을 말풍선에 한국어로 표시하며 동작 확인.
 - [ ] q키 테스트 단축키 — 최종 배포 전 삭제 필요 (`// TEST ONLY` 주석 위치)
 - [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
 - [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기
+
+---
+
+---
+
+## 2026-07-02 ~ 2026-07-06 — 세션 9 (완료)
+
+### 완료한 작업
+
+#### 로비 버튼 구조 개편 (`src/app/page.tsx`)
+
+- **게임 시작 버튼 → 싱글플레이 / 멀티플레이 두 버튼으로 분화** (둘 다 노란색 활성 스타일)
+- **게임 변경 버튼 위치 이동**: 타이틀 아래 → `absolute bottom-6` 화면 하단 중앙으로 이동, 크기·색상 소폭 조정(서브 액션 강조)
+- `<main>` 에 `relative` 추가 (절대 위치 기준점)
+
+#### Socket.io 기본 연결 설정
+
+- **패키지 설치**: `socket.io ^4.8.3`, `socket.io-client ^4.8.3`, `tsx ^4.22.4` (devDep)
+- **커스텀 서버 (`server.ts`, 루트 신규)** — Next.js HTTP 서버를 직접 생성 후 `socket.io`를 얹는 구조. 연결/해제 콘솔 로그. 포트는 `process.env.PORT` 또는 기본값 3000
+- **`package.json` dev 스크립트 변경**: `next dev` → `tsx server.ts`
+- 참고: 이후 작업에서 멀티플레이 팝업 UI 흐름을 먼저 완성하는 방향으로 진행했고, 팝업 내부에서 실제 소켓 연결/룸 로직은 아직 붙이지 않았다 (`server.ts`는 현재 미사용 상태로 대기 중, TODO로 남겨둠).
+
+#### 싱글/멀티 플레이어 설정 팝업 분리
+
+- 기존 플레이어 설정 팝업을 `PlayerSetupPopup({ title, onClose })` 컴포넌트로 추출, 타이틀을 "싱글 플레이어 설정"으로 변경
+- 오버레이(딤드 영역) 클릭으로 팝업이 닫히는 동작 제거 — X 버튼으로만 닫힘
+- 공용 `PopupHeader({ title, onClose })` 컴포넌트 추출
+
+#### 멀티플레이 진입 팝업 (`MultiplayerPopup`)
+
+- `step` state(`"entry" | "host-settings" | "guest-settings" | "not-found"`)로 화면 전환을 **레이어 스택이 아닌 교체 방식**으로 관리
+- 이름 입력 필드(로컬스토리지 `las-vegas:multiplayerName`에 영속화) + 구분선 + "방 만들기"(→ host-settings) + 초대 URL 입력(Enter 키로도 제출) + "참가하기" 버튼
+- "참가하기": 입력값이 `validroom`이면 guest-settings, 그 외에는 "방을 찾을 수 없습니다." + "돌아가기"(entry 복귀) 화면
+- X 버튼은 항상 팝업 전체를 완전히 닫는다 (entry로 되돌리지 않음)
+
+#### 멀티플레이 방 설정 팝업 — 호스트/게스트 분화 (`MultiplayerRoomPopup`)
+
+와이어프레임(요소 배치만 참고, 텍스트는 기존 앱 용어에 맞춤)을 기반으로 구현:
+
+- 공통: 플레이어 이름 필드는 호스트/게스트 모두 읽기 전용, AI 토글 → 클릭 무반응 원형 `AIBadge`로 교체, "URL 복사" 버튼은 양쪽 다 활성화(`navigator.clipboard.writeText(window.location.href)`)
+- 호스트: 모든 슬롯 색상 편집 가능(`ColorSelect`), 게임 설정 편집 가능, "기본값으로"/"게임 시작" 버튼 활성
+- 게스트: 본인 슬롯(`GUEST_OWN_SLOT_INDEX` — 현재 1로 하드코딩, 추후 입장 순서 기반 동적 배정 예정)만 색상 편집 가능(`ColorSelect`), 나머지는 `ColorDisplay`(읽기 전용), 게임 설정은 `ReadOnlyBox`/`disabled` Toggle, "기본값으로"/"게임 시작"은 `disabled` + `disabled:cursor-not-allowed`
+- 팝업 타이틀: 호스트는 `"{이름}의 멀티플레이 방"`, 게스트는 고정 문구 `"멀티플레이 방"` (호스트 이름을 아직 알 수 없으므로 — 실제 Socket.io 연동 시 서버에서 받아와 교체 예정, 코드에 주석 명시)
+- `handleStartGame()`은 현재 no-op (`// TODO: 실제 Socket.io 연동 시 방 정보 전송`)
+
+#### 버그 수정 — `las-vegas:multiplayerName` 로컬스토리지 초기화 문제
+
+- **증상**: 멀티플레이 버튼 클릭 시 저장된 이름이 있어도 항상 "플레이어"로 덮어써짐
+- **원인**: 불러오기(load) `useEffect([])`와 저장(save) `useEffect([name])`를 분리한 구조에서, Next.js 개발 모드의 React Strict Mode 이중 마운트 특성상 save effect가 아직 load effect의 `setName` 반영 전 렌더(기본값 "플레이어")를 기준으로 먼저 로컬스토리지를 덮어쓰는 경합이 발생
+- **수정**: load effect를 제거하고 `useState`의 lazy initializer에서 로컬스토리지를 직접 읽도록 변경 (`() => localStorage.getItem(STORAGE_MULTIPLAYER_NAME_KEY) ?? "플레이어"`). 이 팝업은 버튼 클릭 후에만 마운트되어 SSR 대상이 아니므로 안전함
+- Playwright로 저장값 유지 케이스/기본값 케이스 모두 검증 완료
+
+#### 검증
+
+- `npx tsc --noEmit`, `npx eslint src/app/page.tsx` 모두 통과
+- Playwright(임시 설치 후 검증·정리)로 진입→호스트 설정, 진입→invalid room→돌아가기, 진입→validroom(Enter 키)→게스트 설정 전체 흐름 스크린샷 확인, 콘솔 에러 없음 확인
+- 검증에 사용한 임시 스크립트·`playwright` 패키지는 모두 정리, `package-lock.json`은 `npm install`로 재생성해 깨끗한 상태 유지
+
+---
+
+### 현재 상태
+
+로비의 싱글/멀티플레이 진입 팝업과, 멀티플레이 방 설정 팝업의 호스트/게스트 UI 분화가 모두 완료되었다.  
+실제 Socket.io 방 생성/참가/동기화 로직은 아직 연결되지 않았고, `server.ts`의 기본 연결 테스트 코드도 현재는 페이지에서 호출되지 않는 대기 상태다.  
+`npx tsc --noEmit` 에러 없음 확인.
+
+---
+
+### 미결 사항 (누적)
+
+- [ ] q키 테스트 단축키 — 최종 배포 전 삭제 필요 (`// TEST ONLY` 주석 위치)
+- [ ] 에러 핸들링: LLM API 키 미설정, API 호출 실패 시 사용자 안내
+- [ ] `npm audit` 경고 — Next.js 내부 postcss 취약점이나, `npm audit fix --force`하면 Next.js 9.x로 역행하므로 보류 중. Next.js 업스트림 패치 대기
+- [ ] 멀티플레이 실제 Socket.io 연동: 방 생성/참가, 게임 상태 동기화 (`MultiplayerRoomPopup.handleStartGame` TODO)
+- [ ] 게스트 슬롯 동적 배정: 현재 `GUEST_OWN_SLOT_INDEX = 1` 하드코딩 → 입장 순서 기반으로 교체 예정
+- [ ] 게스트 화면 방 타이틀: 현재 고정 문구 "멀티플레이 방" → 서버에서 호스트 이름 받아와 표시하도록 교체 예정
+
+---
+
+### 다음 세션 예정 작업
+
+- 멀티플레이 Socket.io 이벤트 설계 (방 생성/참가/퇴장, 슬롯 배정, 설정 동기화)
+- `MultiplayerRoomPopup` ↔ 서버 상태 실시간 연동
+- 멀티플레이 게임 진행 로직 (game/page.tsx와의 연결 방식 설계 포함)

@@ -156,6 +156,14 @@ LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 
 
 `valid_actions.length === 1`(롤 결과 눈금이 하나뿐)이면 `/api/llm-action` 호출을 생략하고 즉시 해당 액션을 선택한다. `SINGLE_ACTION_PHRASES` 배열(5개 한국어 문구) 중 랜덤으로 reasoning을 생성해 말풍선에 표시. `깡통` 모델 분기보다 앞에 위치하므로 모든 LLM 플레이어에 일괄 적용된다.
 
+### 20. 팝업 전환 — `step` state 교체 패턴
+
+로비의 멀티플레이 팝업(`MultiplayerPopup`)처럼 한 팝업 안에서 여러 화면(진입 → 방 찾기 실패 → 설정)을 오가야 할 때는 팝업을 새로 열고 닫는 대신, 컴포넌트 내부 `step` state(예: `"entry" | "host-settings" | "guest-settings" | "not-found"`)로 렌더 분기해 **레이어를 쌓지 않고 교체**한다. X 버튼은 항상 팝업 전체를 완전히 닫고(`onClose`), "돌아가기" 같은 내부 버튼만 `step`을 이전 단계로 되돌린다.
+
+### 21. localStorage 불러오기 — lazy `useState` initializer 우선
+
+컴포넌트가 버튼 클릭 등 사용자 상호작용 이후에만 마운트되어 SSR 대상이 아닌 경우(예: 팝업), localStorage 값을 별도의 "불러오기" `useEffect([])` + `useState(기본값)`으로 나누지 않는다. React Strict Mode의 개발 모드 이중 마운트 특성상, "저장" `useEffect`가 아직 "불러오기" effect의 `setState`가 반영되지 않은 렌더(기본값 상태)를 기준으로 먼저 localStorage를 덮어써버리는 경합이 발생할 수 있다. 대신 `useState`의 lazy initializer에서 `localStorage.getItem(...)`을 직접 읽고(`() => localStorage.getItem(KEY) ?? 기본값`), "저장" effect만 남긴다. (`MultiplayerPopup`의 `las-vegas:multiplayerName` 처리가 이 패턴의 예시.) SSR 시점에 마운트될 수 있는 컴포넌트(로비 페이지 최상단 등)에는 이 패턴을 적용하면 안 되며, 기존의 분리된 로드 effect 방식(항목 16)을 유지한다.
+
 ---
 
 ## 환경변수
