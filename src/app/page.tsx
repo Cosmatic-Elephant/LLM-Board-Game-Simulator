@@ -2,10 +2,29 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { PLAYER_COLORS, type ColorKey } from "@/lib/constants";
+import {
+  DEFAULT_CUTOFF,
+  DEFAULT_HUMAN_FIRST,
+  DEFAULT_SLOT_COLORS,
+  DEFAULT_SLOT_MODEL_ID,
+  PLAYER_COLORS,
+  type ColorKey,
+} from "@/lib/constants";
+import { getSocket } from "@/lib/socket-client";
+import type {
+  ColorsUpdatePayload,
+  CreateRoomAck,
+  JoinRoomAck,
+  ModelsUpdatePayload,
+  RoomParticipant,
+  RoomUpdatePayload,
+} from "@/types/multiplayer";
 
 const MODEL_OPTIONS = ["claude-sonnet-4-6", "gpt-4o", "gemini-pro", "깡통"] as const;
 const CUTOFF_OPTIONS = [50000, 60000, 70000, 80000, 90000, 100000];
+
+// 멀티플레이 방 슬롯(0~3번)이 아직 게스트가 입장하지 않은 "AI 슬롯"일 때의 기본 모델 배열.
+const DEFAULT_SLOT_MODELS: string[] = Array(4).fill(DEFAULT_SLOT_MODEL_ID);
 
 const STORAGE_PLAYERS_KEY  = "las-vegas:playerConfig";
 const STORAGE_SETTINGS_KEY = "las-vegas:gameSettings";
@@ -24,8 +43,6 @@ const DEFAULT_PLAYERS: PlayerSlot[] = [
   { color: "green",  name: "플레이어 3", isAI: false, modelId: "claude-sonnet-4-6" },
   { color: "blue",   name: "플레이어 4", isAI: false, modelId: "claude-sonnet-4-6" },
 ];
-const DEFAULT_HUMAN_FIRST = true;
-const DEFAULT_CUTOFF      = 50000;
 
 function Toggle({ on, onToggle, disabled = false }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
   return (
@@ -377,52 +394,84 @@ function PopupHeader({ title, onClose }: { title: string; onClose: () => void })
   );
 }
 
-// TEMP: 실제 Socket.io 연동 전까지 게스트는 2번 슬롯에 고정 배정한다.
-// 추후 입장 순서에 따라 동적으로 배정하도록 교체할 예정.
-const GUEST_OWN_SLOT_INDEX = 1;
+// 슬롯을 참가자 목록·색상·모델과 병합해 렌더링용 PlayerSlot 배열을 만든다.
+// 참가자가 없는 슬롯은 AI 슬롯(isAI: true)으로, 있으면 사람 슬롯(isAI: false)으로 취급한다.
+function mergeSlots(
+  base: PlayerSlot[],
+  participants: RoomParticipant[],
+  colors: ColorKey[],
+  models: string[]
+): PlayerSlot[] {
+  return base.map((p, i) => {
+    const participant = participants.find((pt) => pt.slotIndex === i);
+    return {
+      ...p,
+      name: participant ? participant.name : "",
+      isAI: !participant,
+      modelId: models[i] ?? p.modelId,
+      color: colors[i] ?? p.color,
+    };
+  });
+}
 
 function MultiplayerRoomPopup({
-  name,
   role,
+  roomId,
+  hostName,
+  ownSlotIndex,
+  participants,
+  colors,
+  onColorChange,
+  models,
+  onModelChange,
+  humanFirst,
+  cutoff,
+  onHumanFirstChange,
+  onCutoffChange,
   onClose,
 }: {
-  name: string;
   role: "host" | "guest";
+  roomId: string;
+  hostName: string;
+  ownSlotIndex: number;
+  participants: RoomParticipant[];
+  colors: ColorKey[];
+  onColorChange: (slotIndex: number, color: ColorKey) => void;
+  models: string[];
+  onModelChange: (slotIndex: number, modelId: string) => void;
+  humanFirst: boolean;
+  cutoff: number;
+  onHumanFirstChange: (humanFirst: boolean) => void;
+  onCutoffChange: (cutoff: number) => void;
   onClose: () => void;
 }) {
   const isHost = role === "host";
 
-  const [players, setPlayers] = useState<PlayerSlot[]>(() => {
-    const base = DEFAULT_PLAYERS.map((p) => ({ ...p }));
-    base[0] = { ...base[0], name };
-    return base;
-  });
-  const [humanFirst, setHumanFirst] = useState(DEFAULT_HUMAN_FIRST);
-  const [cutoff, setCutoff] = useState(DEFAULT_CUTOFF);
+  const [players, setPlayers] = useState<PlayerSlot[]>(() =>
+    mergeSlots(DEFAULT_PLAYERS, participants, colors, models)
+  );
 
-  function updatePlayerColor(i: number, color: ColorKey) {
-    setPlayers((prev) => prev.map((p, idx) => (idx === i ? { ...p, color } : p)));
-  }
+  // 서버에서 참가자 목록/색상/모델이 갱신될 때마다(입장·퇴장·색상·모델 변경) 슬롯을 실시간으로 반영한다.
+  useEffect(() => {
+    setPlayers((prev) => mergeSlots(prev, participants, colors, models));
+  }, [participants, colors, models]);
 
   function handleResetToDefaults() {
-    const base = DEFAULT_PLAYERS.map((p) => ({ ...p }));
-    base[0] = { ...base[0], name };
-    setPlayers(base);
-    setHumanFirst(DEFAULT_HUMAN_FIRST);
-    setCutoff(DEFAULT_CUTOFF);
+    DEFAULT_SLOT_COLORS.forEach((color, i) => onColorChange(i, color));
+    onHumanFirstChange(DEFAULT_HUMAN_FIRST);
+    onCutoffChange(DEFAULT_CUTOFF);
   }
 
   async function handleCopyUrl() {
-    await navigator.clipboard.writeText(window.location.href);
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+    await navigator.clipboard.writeText(inviteUrl);
   }
 
   function handleStartGame() {
-    // TODO: 실제 Socket.io 연동 시 방 정보 전송
+    // TODO: 게임 시작 시 실제 게임 상태 동기화 로직 구현
   }
 
-  // TEMP: 게스트는 아직 호스트 이름을 알 수 없어 고정 문구를 표시한다.
-  // 추후 Socket.io 연동 시 서버에서 받아온 호스트 이름으로 교체할 예정.
-  const roomTitle = isHost ? `${name}의 멀티플레이 방` : "멀티플레이 방";
+  const roomTitle = `${hostName}의 멀티플레이 방`;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -437,26 +486,40 @@ function MultiplayerRoomPopup({
             <span className="text-xs text-gray-400 text-center">AI</span>
           </div>
           {players.map((p, i) => {
-            const canEditColor = isHost || i === GUEST_OWN_SLOT_INDEX;
+            const canEditColor = isHost || i === ownSlotIndex;
             const takenKeys = players.filter((_, j) => j !== i).map((other) => other.color);
             return (
               <div key={i} className="grid grid-cols-[6rem_1fr_3.5rem] gap-2 items-center">
                 {canEditColor ? (
                   <ColorSelect
                     value={p.color}
-                    onChange={(v) => updatePlayerColor(i, v)}
+                    onChange={(v) => onColorChange(i, v)}
                     takenKeys={takenKeys}
                   />
                 ) : (
                   <ColorDisplay value={p.color} />
                 )}
 
-                <input
-                  type="text"
-                  value={p.name}
-                  readOnly
-                  className="w-full bg-zinc-700 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white cursor-default focus:outline-none"
-                />
+                {p.isAI ? (
+                  isHost ? (
+                    <SelectField value={p.modelId} onChange={(v) => onModelChange(i, v)}>
+                      {MODEL_OPTIONS.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </SelectField>
+                  ) : (
+                    <ReadOnlyBox>{p.modelId}</ReadOnlyBox>
+                  )
+                ) : (
+                  <input
+                    type="text"
+                    value={p.name}
+                    readOnly
+                    className="w-full bg-zinc-700 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white cursor-default focus:outline-none"
+                  />
+                )}
 
                 <div className="flex justify-center">
                   <AIBadge on={p.isAI} />
@@ -474,14 +537,14 @@ function MultiplayerRoomPopup({
 
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-300">사람이 먼저 플레이</span>
-            <Toggle on={humanFirst} onToggle={() => setHumanFirst((v) => !v)} disabled={!isHost} />
+            <Toggle on={humanFirst} onToggle={() => onHumanFirstChange(!humanFirst)} disabled={!isHost} />
           </div>
 
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm text-gray-300 flex-shrink-0">지폐 배치 커트라인</span>
             <div className="w-44">
               {isHost ? (
-                <SelectField value={cutoff} onChange={(v) => setCutoff(Number(v))}>
+                <SelectField value={cutoff} onChange={(v) => onCutoffChange(Number(v))}>
                   {CUTOFF_OPTIONS.map((v) => (
                     <option key={v} value={v}>
                       {v.toLocaleString()}
@@ -523,8 +586,22 @@ function MultiplayerRoomPopup({
   );
 }
 
+// "https://.../?room=ABC123" 형태의 초대 URL 또는 방 코드를 그대로 입력한 경우 모두 처리한다.
+function extractRoomId(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    return url.searchParams.get("room");
+  } catch {
+    return trimmed;
+  }
+}
+
 function MultiplayerPopup({ onClose }: { onClose: () => void }) {
-  const [step, setStep] = useState<"entry" | "host-settings" | "guest-settings" | "not-found">("entry");
+  const [step, setStep] = useState<
+    "entry" | "host-settings" | "guest-settings" | "not-found" | "host-left"
+  >("entry");
   // 이 팝업은 버튼 클릭 후에만 마운트되므로(SSR 대상 아님) 로컬스토리지를 초기값에서 바로 읽어도 안전하다.
   // load/save를 분리된 effect 두 개로 처리하면 마운트 시점에 save effect가 default 값으로
   // 먼저 덮어써버리는 경합이 생길 수 있어(Strict Mode 이중 실행 시 특히), lazy init으로 회피한다.
@@ -532,31 +609,194 @@ function MultiplayerPopup({ onClose }: { onClose: () => void }) {
     () => localStorage.getItem(STORAGE_MULTIPLAYER_NAME_KEY) ?? "플레이어"
   );
   const [roomUrl, setRoomUrl] = useState("");
+  const [notFoundMessage, setNotFoundMessage] = useState("방을 찾을 수 없습니다.");
+
+  const [roomId, setRoomId] = useState("");
+  const [hostName, setHostName] = useState("");
+  const [ownSlotIndex, setOwnSlotIndex] = useState(0);
+  const [participants, setParticipants] = useState<RoomParticipant[]>([]);
+  const [colors, setColors] = useState<ColorKey[]>([...DEFAULT_SLOT_COLORS]);
+  const [models, setModels] = useState<string[]>([...DEFAULT_SLOT_MODELS]);
+  const [humanFirst, setHumanFirst] = useState(DEFAULT_HUMAN_FIRST);
+  const [cutoff, setCutoff] = useState(DEFAULT_CUTOFF);
 
   // 이름 변경 시 자동 저장
   useEffect(() => {
     localStorage.setItem(STORAGE_MULTIPLAYER_NAME_KEY, name);
   }, [name]);
 
+  // 방의 참가자 목록/게임 설정이 바뀔 때마다(입장·퇴장·설정 변경) 서버가 브로드캐스트하는 room-update를 반영한다.
+  useEffect(() => {
+    const socket = getSocket();
+    function handleRoomUpdate(data: RoomUpdatePayload) {
+      setParticipants(data.participants);
+      setHumanFirst(data.settings.humanFirst);
+      setCutoff(data.settings.cutline);
+    }
+    socket.on("room-update", handleRoomUpdate);
+    return () => {
+      socket.off("room-update", handleRoomUpdate);
+    };
+  }, []);
+
+  // 참가자 중 누군가 색상을 바꾸면 서버가 브로드캐스트하는 colors-update를 반영한다.
+  useEffect(() => {
+    const socket = getSocket();
+    function handleColorsUpdate(data: ColorsUpdatePayload) {
+      setColors(data.colors);
+    }
+    socket.on("colors-update", handleColorsUpdate);
+    return () => {
+      socket.off("colors-update", handleColorsUpdate);
+    };
+  }, []);
+
+  // 참가자 중 누군가(호스트) AI 슬롯의 모델을 바꾸면 서버가 브로드캐스트하는 models-update를 반영한다.
+  useEffect(() => {
+    const socket = getSocket();
+    function handleModelsUpdate(data: ModelsUpdatePayload) {
+      setModels(data.models);
+    }
+    socket.on("models-update", handleModelsUpdate);
+    return () => {
+      socket.off("models-update", handleModelsUpdate);
+    };
+  }, []);
+
+  // 호스트가 방을 나가면(퇴장 또는 연결 해제) 서버가 남은 게스트 전원에게 room-closed를 보낸다.
+  useEffect(() => {
+    const socket = getSocket();
+    function handleRoomClosed() {
+      setRoomId("");
+      setHostName("");
+      setOwnSlotIndex(0);
+      setParticipants([]);
+      setColors([...DEFAULT_SLOT_COLORS]);
+      setModels([...DEFAULT_SLOT_MODELS]);
+      setHumanFirst(DEFAULT_HUMAN_FIRST);
+      setCutoff(DEFAULT_CUTOFF);
+      setStep("host-left");
+    }
+    socket.on("room-closed", handleRoomClosed);
+    return () => {
+      socket.off("room-closed", handleRoomClosed);
+    };
+  }, []);
+
+  // X 버튼으로 팝업을 닫을 때, 참여 중인 방이 있다면 서버에 명시적으로 퇴장을 알려 슬롯을 비운다.
+  function handleClosePopup() {
+    if (roomId) {
+      getSocket().emit("leave-room");
+    }
+    onClose();
+  }
+
+  function handleColorChange(slotIndex: number, color: ColorKey) {
+    getSocket().emit("update-color", { slotIndex, color });
+  }
+
+  function handleModelChange(slotIndex: number, modelId: string) {
+    getSocket().emit("update-model", { slotIndex, modelId });
+  }
+
+  function handleHumanFirstChange(nextHumanFirst: boolean) {
+    getSocket().emit("update-settings", { humanFirst: nextHumanFirst, cutline: cutoff });
+  }
+
+  function handleCutoffChange(nextCutoff: number) {
+    getSocket().emit("update-settings", { humanFirst, cutline: nextCutoff });
+  }
+
+  function handleCreateRoom() {
+    const socket = getSocket();
+    socket.emit("create-room", { name }, (res: CreateRoomAck) => {
+      setRoomId(res.roomId);
+      setHostName(name);
+      setOwnSlotIndex(0);
+      setParticipants(res.participants);
+      setColors(res.colors);
+      setModels(res.models);
+      setHumanFirst(res.settings.humanFirst);
+      setCutoff(res.settings.cutline);
+      setStep("host-settings");
+    });
+  }
+
   function handleJoinRoom() {
-    setStep(roomUrl === "validroom" ? "guest-settings" : "not-found");
+    const parsedRoomId = extractRoomId(roomUrl);
+    if (!parsedRoomId) {
+      setNotFoundMessage("방을 찾을 수 없습니다.");
+      setStep("not-found");
+      return;
+    }
+    const socket = getSocket();
+    socket.emit("join-room", { roomId: parsedRoomId, name }, (res: JoinRoomAck) => {
+      if (!res.ok) {
+        setNotFoundMessage(res.error);
+        setStep("not-found");
+        return;
+      }
+      setRoomId(res.roomId);
+      setHostName(res.hostName);
+      setOwnSlotIndex(res.slotIndex);
+      setParticipants(res.participants);
+      setColors(res.colors);
+      setModels(res.models);
+      setHumanFirst(res.settings.humanFirst);
+      setCutoff(res.settings.cutline);
+      setStep("guest-settings");
+    });
   }
 
   if (step === "host-settings") {
-    return <MultiplayerRoomPopup name={name} role="host" onClose={onClose} />;
+    return (
+      <MultiplayerRoomPopup
+        role="host"
+        roomId={roomId}
+        hostName={hostName}
+        ownSlotIndex={ownSlotIndex}
+        participants={participants}
+        colors={colors}
+        onColorChange={handleColorChange}
+        models={models}
+        onModelChange={handleModelChange}
+        humanFirst={humanFirst}
+        cutoff={cutoff}
+        onHumanFirstChange={handleHumanFirstChange}
+        onCutoffChange={handleCutoffChange}
+        onClose={handleClosePopup}
+      />
+    );
   }
 
   if (step === "guest-settings") {
-    return <MultiplayerRoomPopup name={name} role="guest" onClose={onClose} />;
+    return (
+      <MultiplayerRoomPopup
+        role="guest"
+        roomId={roomId}
+        hostName={hostName}
+        ownSlotIndex={ownSlotIndex}
+        participants={participants}
+        colors={colors}
+        onColorChange={handleColorChange}
+        models={models}
+        onModelChange={handleModelChange}
+        humanFirst={humanFirst}
+        cutoff={cutoff}
+        onHumanFirstChange={handleHumanFirstChange}
+        onCutoffChange={handleCutoffChange}
+        onClose={handleClosePopup}
+      />
+    );
   }
 
   if (step === "not-found") {
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
         <div className="bg-zinc-800 border border-zinc-600 rounded-2xl p-6 flex flex-col gap-5 shadow-xl w-[480px]">
-          <PopupHeader title="멀티플레이" onClose={onClose} />
+          <PopupHeader title="멀티플레이" onClose={handleClosePopup} />
           <div className="flex flex-col items-center gap-5 py-4">
-            <span className="text-sm text-gray-300">방을 찾을 수 없습니다.</span>
+            <span className="text-sm text-gray-300">{notFoundMessage}</span>
             <button
               onClick={() => setStep("entry")}
               className="px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 active:bg-zinc-800 rounded-xl text-sm font-bold text-white transition-colors"
@@ -569,10 +809,28 @@ function MultiplayerPopup({ onClose }: { onClose: () => void }) {
     );
   }
 
+  if (step === "host-left") {
+    return (
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div className="bg-zinc-800 border border-zinc-600 rounded-2xl p-6 flex flex-col gap-5 shadow-xl w-[480px]">
+          <div className="flex flex-col items-center gap-5 py-4">
+            <span className="text-sm text-gray-300">호스트가 방을 이탈했습니다.</span>
+            <button
+              onClick={() => setStep("entry")}
+              className="px-6 py-2.5 bg-yellow-500 hover:bg-yellow-400 active:bg-yellow-600 rounded-xl text-sm font-bold text-black transition-colors"
+            >
+              확인
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-zinc-800 border border-zinc-600 rounded-2xl p-6 flex flex-col gap-5 shadow-xl w-[480px]">
-        <PopupHeader title="멀티플레이" onClose={onClose} />
+        <PopupHeader title="멀티플레이" onClose={handleClosePopup} />
 
         <div className="flex flex-col gap-1.5">
           <span className="text-xs text-gray-400">이름</span>
@@ -588,7 +846,7 @@ function MultiplayerPopup({ onClose }: { onClose: () => void }) {
 
         <div className="flex flex-col gap-3">
           <button
-            onClick={() => setStep("host-settings")}
+            onClick={handleCreateRoom}
             className="w-full py-2.5 bg-yellow-500 hover:bg-yellow-400 active:bg-yellow-600 rounded-xl text-sm font-bold text-black transition-colors"
           >
             방 만들기
