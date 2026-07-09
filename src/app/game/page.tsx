@@ -24,6 +24,12 @@ const PLAYER_CONFIG_KEY   = "las-vegas:playerConfig";
 const GAME_SETTINGS_KEY   = "las-vegas:gameSettings";
 const DEFAULT_SETTINGS    = { humanFirst: true, cutline: 50000 };
 
+// 멀티플레이는 방 참가 시 sessionStorage(탭별로 격리)에 설정을 저장하므로 먼저 확인하고,
+// 없으면 싱글플레이 로비가 저장한 localStorage 값으로 폴백한다.
+function readConfigItem(key: string): string | null {
+  return sessionStorage.getItem(key) ?? localStorage.getItem(key);
+}
+
 const EMPTY_DICE: Record<Color, number> = { red: 0, yellow: 0, green: 0, blue: 0, orange: 0, purple: 0, pink: 0, white: 0 };
 
 const EMPTY_CASINOS: Record<CasinoNumber, CasinoState> = {
@@ -180,7 +186,7 @@ export default function GamePage() {
   }
 
   useEffect(() => {
-    const rawPlayers = localStorage.getItem(PLAYER_CONFIG_KEY);
+    const rawPlayers = readConfigItem(PLAYER_CONFIG_KEY);
     const playerConfigs = rawPlayers
       ? (JSON.parse(rawPlayers) as Array<{ color: Color; isLLM: boolean; modelId: string | null; name?: string }>)
       : null;
@@ -195,7 +201,7 @@ export default function GamePage() {
         }))
       : INITIAL_PLAYERS;
 
-    const rawSettings = localStorage.getItem(GAME_SETTINGS_KEY);
+    const rawSettings = readConfigItem(GAME_SETTINGS_KEY);
     const settings = rawSettings
       ? (JSON.parse(rawSettings) as { humanFirst: boolean; cutline: number })
       : DEFAULT_SETTINGS;

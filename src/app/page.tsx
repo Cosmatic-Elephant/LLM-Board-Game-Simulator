@@ -16,8 +16,10 @@ import type {
   CreateRoomAck,
   JoinRoomAck,
   ModelsUpdatePayload,
+  PlayerConfigEntry,
   RoomParticipant,
   RoomUpdatePayload,
+  StartGamePayload,
 } from "@/types/multiplayer";
 
 const MODEL_OPTIONS = ["claude-sonnet-4-6", "gpt-4o", "gemini-pro", "깡통"] as const;
@@ -446,6 +448,7 @@ function MultiplayerRoomPopup({
   onClose: () => void;
 }) {
   const isHost = role === "host";
+  const router = useRouter();
 
   const [players, setPlayers] = useState<PlayerSlot[]>(() =>
     mergeSlots(DEFAULT_PLAYERS, participants, colors, models)
@@ -455,6 +458,21 @@ function MultiplayerRoomPopup({
   useEffect(() => {
     setPlayers((prev) => mergeSlots(prev, participants, colors, models));
   }, [participants, colors, models]);
+
+  // 호스트가 게임 시작을 누르면 서버가 모든 클라이언트(호스트 포함)에 game-started를 브로드캐스트한다.
+  // 각 클라이언트는 이를 받아 싱글플레이 로비와 동일한 키로 sessionStorage에 저장한 뒤 /multi로 이동한다.
+  useEffect(() => {
+    const socket = getSocket();
+    function handleGameStarted(data: StartGamePayload) {
+      sessionStorage.setItem(STORAGE_PLAYERS_KEY, JSON.stringify(data.playerConfig));
+      sessionStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(data.gameSettings));
+      router.push("/multi");
+    }
+    socket.on("game-started", handleGameStarted);
+    return () => {
+      socket.off("game-started", handleGameStarted);
+    };
+  }, [router]);
 
   function handleResetToDefaults() {
     DEFAULT_SLOT_COLORS.forEach((color, i) => onColorChange(i, color));
@@ -468,7 +486,19 @@ function MultiplayerRoomPopup({
   }
 
   function handleStartGame() {
-    // TODO: 게임 시작 시 실제 게임 상태 동기화 로직 구현
+    const colorMeta = Object.fromEntries(PLAYER_COLORS.map((c) => [c.key, c]));
+    const playerConfig: PlayerConfigEntry[] = players.map((p) => ({
+      color: p.color,
+      label: colorMeta[p.color].label,
+      hex: colorMeta[p.color].hex,
+      name: p.isAI ? "" : p.name,
+      isLLM: p.isAI,
+      modelId: p.isAI ? p.modelId : null,
+    }));
+    getSocket().emit("start-game", {
+      playerConfig,
+      gameSettings: { humanFirst, cutline: cutoff },
+    });
   }
 
   const roomTitle = `${hostName}의 멀티플레이 방`;

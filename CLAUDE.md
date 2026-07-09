@@ -28,16 +28,19 @@
 ├── DESIGN.md                    # 게임 규칙 · LLM 페이로드 스키마 원본 (변경 금지)
 ├── CLAUDE.md                    # 이 파일 — Claude Code 가이드
 ├── PROGRESS.md                  # 세션별 작업 진행 기록
+├── server.ts                    # 커스텀 Next.js + Socket.io 서버 (`npm run dev`가 실행하는 진입점)
 ├── .env.local.example           # 환경변수 템플릿 (실제 키는 .env.local에)
 ├── src/
 │   ├── types/
-│   │   └── game.ts              # 모든 TypeScript 타입 정의
+│   │   ├── game.ts              # 모든 TypeScript 타입 정의 (싱글/멀티 공용 GameState 등)
+│   │   └── multiplayer.ts       # 방·게임 상태 Socket.io 이벤트 페이로드 타입 (server.ts ↔ page.tsx 공유)
 │   ├── lib/
-│   │   ├── constants.ts         # PLAYER_COLORS 배열 (8색 key/label/hex) · ColorKey 타입
+│   │   ├── constants.ts         # PLAYER_COLORS(8색) · 멀티플레이 방 기본값(DEFAULT_SLOT_* 등)
 │   │   ├── bill-setup.ts        # 빌 덱 생성 · 라운드별 카지노 분배
 │   │   ├── scoring.ts           # 라운드 정산 (타이 제거 포함)
-│   │   ├── game-engine.ts       # 게임 상태 기계 전체
-│   │   └── llm-client.ts        # 멀티 프로바이더 LLM 클라이언트
+│   │   ├── game-engine.ts       # 게임 상태 기계 전체 (server.ts가 멀티플레이에도 재사용)
+│   │   ├── llm-client.ts        # 멀티 프로바이더 LLM 클라이언트
+│   │   └── socket-client.ts     # 클라이언트 전역 Socket.io 싱글턴 (getSocket())
 │   ├── components/
 │   │   ├── Casino.tsx           # 카지노 카드 (지폐 스택 · 주사위 배치 표시)
 │   │   ├── PlayerPanel.tsx      # 플레이어 정보 패널 (소지금 · 주사위 수 · 활성 강조)
@@ -45,12 +48,14 @@
 │   └── app/
 │       ├── globals.css
 │       ├── layout.tsx
-│       ├── page.tsx             # 로비 (플레이어·게임 설정 팝업, localStorage 연동)
+│       ├── page.tsx             # 로비 (싱글/멀티 설정 팝업, localStorage/Socket.io 연동)
 │       ├── game/
-│       │   └── page.tsx         # 게임 보드 (배팅·정산·라운드 전환 동작 중)
+│       │   └── page.tsx         # 싱글플레이 게임 보드 (로컬 시뮬레이션, 전체 기능 동작)
+│       ├── multi/
+│       │   └── page.tsx         # 멀티플레이 게임 보드 (서버 권위 GameState 렌더링, 연출 미구현)
 │       └── api/
 │           └── llm-action/
-│               └── route.ts     # LLM 호출 API 엔드포인트 (서버 전용)
+│               └── route.ts     # LLM 호출 API 엔드포인트 (서버 전용, 싱글플레이에서만 사용)
 ```
 
 ---
@@ -163,6 +168,30 @@ LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 
 ### 21. localStorage 불러오기 — lazy `useState` initializer 우선
 
 컴포넌트가 버튼 클릭 등 사용자 상호작용 이후에만 마운트되어 SSR 대상이 아닌 경우(예: 팝업), localStorage 값을 별도의 "불러오기" `useEffect([])` + `useState(기본값)`으로 나누지 않는다. React Strict Mode의 개발 모드 이중 마운트 특성상, "저장" `useEffect`가 아직 "불러오기" effect의 `setState`가 반영되지 않은 렌더(기본값 상태)를 기준으로 먼저 localStorage를 덮어써버리는 경합이 발생할 수 있다. 대신 `useState`의 lazy initializer에서 `localStorage.getItem(...)`을 직접 읽고(`() => localStorage.getItem(KEY) ?? 기본값`), "저장" effect만 남긴다. (`MultiplayerPopup`의 `las-vegas:multiplayerName` 처리가 이 패턴의 예시.) SSR 시점에 마운트될 수 있는 컴포넌트(로비 페이지 최상단 등)에는 이 패턴을 적용하면 안 되며, 기존의 분리된 로드 effect 방식(항목 16)을 유지한다.
+
+### 22. Socket.io 클라이언트는 반드시 싱글턴(`getSocket()`)을 재사용
+
+`src/lib/socket-client.ts`의 `getSocket()`은 모듈 스코프에 소켓 하나만 보관하는 전역 싱글턴이다. 로비에서 방을 생성/참가할 때 이 소켓이 서버의 해당 Socket.IO room에 `join()`되므로, **새 페이지(`/multi` 등)에서 `io()`로 별도 연결을 만들면 그 소켓은 room의 멤버가 아니어서 `io.to(roomId).emit(...)` 브로드캐스트를 절대 받을 수 없다.** 실제로 `/multi` 스켈레톤이 이 실수로 `game-state`를 영원히 못 받는 버그가 있었다 — 반드시 `getSocket()`을 재사용하고, 언마운트 시에도 `socket.disconnect()`가 아니라 `socket.off(...)`로 리스너만 정리한다(공유 연결이므로 한 페이지가 끊으면 안 됨).
+
+### 23. `request-*` 요청/응답 패턴으로 브로드캐스트 경합 방지
+
+서버가 상태 변경 직후(`start-game` 처리 중 등) 곧바로 브로드캐스트하는 이벤트(`game-state`)는, 수신할 페이지가 아직 마운트되어 리스너를 등록하기 전에 지나가 버릴 수 있다(이동 중 경합). 이를 근본적으로 해결하려면 서버가 방 상태를 캐싱해 두고(`room.gameState`), 클라이언트가 마운트 시 `request-game-state` 같은 ack 콜백 이벤트로 현재 상태를 능동적으로 다시 요청한다. 브로드캐스트는 "이미 보고 있는 클라이언트"를 위한 실시간 갱신이고, `request-*`는 "방금 들어온 클라이언트"를 위한 스냅샷 복구라는 두 경로를 항상 같이 둔다.
+
+### 24. 멀티플레이 서버는 싱글플레이 게임 엔진 함수를 그대로 재사용한다
+
+`server.ts`는 자체 게임 로직을 새로 구현하지 않고 `src/lib/game-engine.ts`(`createInitialState`, `rollDice`, `applyRoll`, `getValidActions`, `applyAction`, `applyScoring`)와 `src/lib/bill-setup.ts`(`distributeRound`)를 그대로 import해서 쓴다. 싱글/멀티 두 갈래로 게임 룰이 갈라지지 않도록 하기 위함이며, 이 엔진 함수들을 수정할 때는 항상 두 플레이 모드 모두에 영향을 준다는 것을 염두에 둔다. `shufflePlayers()`만은 예외로, `game/page.tsx`(싱글, 손대지 않는 파일)와 `server.ts`에 각각 동일한 알고리즘이 복제되어 있다.
+
+### 25. 색상 ↔ 슬롯 ↔ 소켓 권한 검증 (`findColorOwnerSocketId`)
+
+멀티플레이 `GameState.players[]`는 색상(`Color`) 기준인데, 실제 조작 권한은 소켓(`socket.id`) 기준이다. 서버는 `room.colors`(슬롯 인덱스 → 색상)와 `room.participants`(슬롯 인덱스 → 소켓)를 조합해 "이 색상을 조작할 수 있는 소켓"을 그때그때 구한다(`findColorOwnerSocketId`). 별도 캐시를 두지 않는 이유는 두 값이 항상 동일한 소스(로비의 색상 선택 UI)에서 갱신되어 서로 어긋날 일이 없기 때문이다. `roll-dice`/`place-bet` 모두 이 함수로 "현재 턴 플레이어 색상의 소유자 == 이 소켓"을 검증하고, 아니면 조용히 무시한다.
+
+### 26. LLM/깡통 자동 진행 — 상호 재귀 스케줄러
+
+`scheduleLLMAutoRollIfNeeded()`와 `scheduleLLMAutoBetIfNeeded()`가 서로를 호출하며 굴림→베팅→다음 플레이어 굴림… 을 사람 개입 없이 이어간다. 각 함수는 `setTimeout` 콜백 안에서 **`room`을 다시 조회**해 그 사이 phase가 바뀌지 않았는지 재확인한 뒤에만 진행한다(지연 도중 다른 이벤트가 상태를 바꿨을 가능성에 대비). 현재는 실제 LLM API를 호출하지 않고 `getValidActions()` 중 무작위로 고르는 것으로 통일되어 있다(깡통과 동일) — 실제 LLM 판단 연동은 아직 TODO.
+
+### 27. `nextRoundPreview` — 다음 라운드 배치는 정산 시점에 한 번만 계산해 캐싱
+
+`distributeRound()`는 내부에서 지폐를 셔플하므로 **같은 입력이라도 호출할 때마다 성공/실패가 달라질 수 있다.** 정산 완료 시점에 "다음 라운드가 가능한가?"를 판단하려고 한 번 호출한 결과를, 호스트가 실제로 "다음 라운드" 버튼(`next-round`)을 누를 때 그대로 재사용해야 한다(`room.nextRoundPreview`에 캐싱) — 그렇지 않으면 정산 시점엔 성공으로 보였는데 버튼을 누르는 시점엔 실패하는(혹은 그 반대) 불일치가 생길 수 있다. 싱글플레이 `game/page.tsx`의 `nextRound` state와 동일한 목적의 패턴이다(항목 9 참고).
 
 ---
 
