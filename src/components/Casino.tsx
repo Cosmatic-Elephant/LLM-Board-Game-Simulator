@@ -49,6 +49,8 @@ interface CasinoProps {
   scoringExitedBillIndices?: number[];
   /** Scoring animation: all remaining dice/bills fade out simultaneously (table clear). */
   scoringTableClearing?: boolean;
+  /** Multiplayer turn-timeout warning: blink the card border (own client only, last 5s of the turn). */
+  timeoutWarning?: boolean;
   fadeDuration?: number;
   onHover: (n: number | null) => void;
   onSelect?: () => void;
@@ -67,6 +69,7 @@ export function Casino({
   scoringExitingBillIdx,
   scoringExitedBillIndices,
   scoringTableClearing,
+  timeoutWarning,
   fadeDuration = 400,
   onHover,
   onSelect,
@@ -84,6 +87,7 @@ export function Casino({
             : "bg-gray-900/60 border-gray-800/60 opacity-50 cursor-default",
           highlighted ? "ring-2 ring-white opacity-100" : "",
         ].join(" ")}
+        style={timeoutWarning ? { animation: "timeout-blink 500ms ease-in-out infinite" } : undefined}
         onMouseEnter={() => onHover(number)}
         onMouseLeave={() => onHover(null)}
         onClick={() => { if (selectable) onSelect?.(); }}

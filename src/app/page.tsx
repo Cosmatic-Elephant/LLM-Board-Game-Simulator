@@ -19,7 +19,6 @@ import type {
   PlayerConfigEntry,
   RoomParticipant,
   RoomUpdatePayload,
-  StartGamePayload,
 } from "@/types/multiplayer";
 
 const MODEL_OPTIONS = ["claude-sonnet-4-6", "gpt-4o", "gemini-pro", "깡통"] as const;
@@ -460,12 +459,13 @@ function MultiplayerRoomPopup({
   }, [participants, colors, models]);
 
   // 호스트가 게임 시작을 누르면 서버가 모든 클라이언트(호스트 포함)에 game-started를 브로드캐스트한다.
-  // 각 클라이언트는 이를 받아 싱글플레이 로비와 동일한 키로 sessionStorage에 저장한 뒤 /multi로 이동한다.
+  // /multi 페이지는 게임 상태를 sessionStorage가 아니라 소켓(request-game-state/game-state)으로 받아오므로
+  // 여기서는 페이지 이동만 하면 된다. 예전에는 싱글플레이 로비와 같은 키로 sessionStorage에도 저장했었는데,
+  // /multi가 이를 전혀 읽지 않으면서도 game/page.tsx의 sessionStorage-우선 폴백만 오염시켜 — 멀티플레이를
+  // 한 번 하고 나면 그 탭에서 여는 싱글플레이가 계속 그 값을 넘겨받는 버그로 이어졌다.
   useEffect(() => {
     const socket = getSocket();
-    function handleGameStarted(data: StartGamePayload) {
-      sessionStorage.setItem(STORAGE_PLAYERS_KEY, JSON.stringify(data.playerConfig));
-      sessionStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(data.gameSettings));
+    function handleGameStarted() {
       router.push("/multi");
     }
     socket.on("game-started", handleGameStarted);
