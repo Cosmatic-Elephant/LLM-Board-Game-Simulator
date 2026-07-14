@@ -52,7 +52,7 @@
 │       ├── game/
 │       │   └── page.tsx         # 싱글플레이 게임 보드 (로컬 시뮬레이션, 전체 기능 동작)
 │       ├── multi/
-│       │   └── page.tsx         # 멀티플레이 게임 보드 (서버 권위 GameState 렌더링, 연출 미구현)
+│       │   └── page.tsx         # 멀티플레이 게임 보드 (서버 권위 GameState 렌더링, 싱글과 동등한 턴·정산 연출 포함)
 │       └── api/
 │           └── llm-action/
 │               └── route.ts     # LLM 호출 API 엔드포인트 (서버 전용, 싱글플레이에서만 사용)
@@ -84,6 +84,7 @@ LLM 응답은 클라이언트가 아닌 `/api/llm-action` 라우트에서 `isVal
 - `claude*` → Anthropic
 - `gpt*` / `o1*` / `o3*` → OpenAI
 - `gemini*` → Google
+- `nvapi-*` 접두사 또는 모델 ID에 `/`가 포함된 경우(예: `meta/llama-3.1-70b-instruct`) → NVIDIA NIM. OpenAI SDK를 그대로 재사용하되 `baseURL`을 `https://integrate.api.nvidia.com/v1`로, API 키를 `NVIDIA_API_KEY`로 교체한다(NIM이 OpenAI 호환 API를 제공하기 때문).
 
 SDK는 동적 import(`await import(...)`)로 지연 로드하므로 사용하지 않는 프로바이더의 패키지가 빌드에 포함되어도 서버 시작 비용이 없다.
 
@@ -193,6 +194,12 @@ LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 
 
 `distributeRound()`는 내부에서 지폐를 셔플하므로 **같은 입력이라도 호출할 때마다 성공/실패가 달라질 수 있다.** 정산 완료 시점에 "다음 라운드가 가능한가?"를 판단하려고 한 번 호출한 결과를, 호스트가 실제로 "다음 라운드" 버튼(`next-round`)을 누를 때 그대로 재사용해야 한다(`room.nextRoundPreview`에 캐싱) — 그렇지 않으면 정산 시점엔 성공으로 보였는데 버튼을 누르는 시점엔 실패하는(혹은 그 반대) 불일치가 생길 수 있다. 싱글플레이 `game/page.tsx`의 `nextRound` state와 동일한 목적의 패턴이다(항목 9 참고).
 
+### 28. 화면 종류별 `<main>` 분기 — 전환 시 `key`로 강제 리마운트, 리마운트 안전한 애니메이션
+
+싱글(`game/page.tsx`)·멀티(`multi/page.tsx`) 모두 진행 중/라운드 종료/게임 종료 화면을 서로 다른 `<main>` return으로 분리해 렌더링한다. `key` 없이 두면 React가 이전 화면의 DOM을 위치·태그 기준으로 재사용하려 들 수 있어(구조가 부분적으로 겹치는 경우), 방금 전까지 "차례" 표시로 위로 이동해 있던 플레이어 패널 위치가 다음 화면까지 리셋되지 않는 등의 버그가 생길 수 있다. 각 `<main>`에 화면 종류별 고유 `key`(예: `"play"`/`"round-end"`/`"game-over"`)를 부여해 전환 시 항상 완전히 새로 마운트되도록 강제한다.
+
+단, 리마운트 자체가 "새 DOM 노드 = 진입 애니메이션 재생"을 의미하므로, 화면 전환 순간에도 계속 떠 있던 요소(예: 정산 진입 직전의 마지막 베팅 말풍선)는 리마운트 때마다 애니메이션이 처음부터 다시 재생되어 버린다. 멀티는 색상별로 "이미 재생 완료된 말풍선 key"를 Ref(`bubbleEnteredKeyRef`)로 기억해 두었다가, 리마운트된 같은 key의 말풍선은 애니메이션 없이 정지 상태로 렌더링해 이를 막는다. 싱글은 정산 연출 시작 시점(`runScoringAnimation()` 진입)에 말풍선을 이미 비워 두므로 화면 전환 시점에 살아있는 말풍선이 없어 이 처리가 불필요하다.
+
 ---
 
 ## 환경변수
@@ -203,6 +210,7 @@ LLM 턴은 `useEffect`(deps: `[turn, currentPlayerIndex, turnPhase]`) 하나로 
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 GOOGLE_API_KEY=...
+NVIDIA_API_KEY=...
 
 # 플레이어 슬롯별 모델 (선택, 코드 내 기본값 사용 가능)
 LLM_PLAYER_1_MODEL=claude-sonnet-4-6

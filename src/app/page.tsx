@@ -21,7 +21,14 @@ import type {
   RoomUpdatePayload,
 } from "@/types/multiplayer";
 
-const MODEL_OPTIONS = ["claude-sonnet-4-6", "gpt-4o", "gemini-pro", "깡통"] as const;
+const MODEL_OPTIONS = [
+  { value: "claude-sonnet-4-6", label: "claude-sonnet-4-6" },
+  { value: "gpt-4o", label: "gpt-4o" },
+  { value: "gemini-pro", label: "gemini-pro" },
+  { value: "meta/llama-3.1-70b-instruct", label: "Llama 3.1 70B" },
+  { value: "zhipuai/glm-4", label: "GLM-4 (무료)" },
+  { value: "깡통", label: "깡통" },
+] as const;
 const CUTOFF_OPTIONS = [50000, 60000, 70000, 80000, 90000, 100000];
 
 // 멀티플레이 방 슬롯(0~3번)이 아직 게스트가 입장하지 않은 "AI 슬롯"일 때의 기본 모델 배열.
@@ -283,8 +290,8 @@ function PlayerSetupPopup({ title, onClose }: { title: string; onClose: () => vo
                 {p.isAI ? (
                   <SelectField value={p.modelId} onChange={(v) => updatePlayer(i, "modelId", v)}>
                     {MODEL_OPTIONS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
+                      <option key={m.value} value={m.value}>
+                        {m.label}
                       </option>
                     ))}
                   </SelectField>
@@ -364,7 +371,7 @@ function loadFromStorage(): { players: PlayerSlot[]; humanFirst: boolean; cutoff
       color: (p.color as ColorKey) ?? "red",
       name: (p.name as string | undefined) ?? "",
       isAI: Boolean(p.isAI ?? p.isLLM),
-      modelId: (p.modelId as string | null | undefined) ?? MODEL_OPTIONS[0],
+      modelId: (p.modelId as string | null | undefined) ?? MODEL_OPTIONS[0].value,
     }));
     const savedSettings = JSON.parse(rawSettings) as { humanFirst: boolean; cutline: number };
     return { players: savedPlayers, humanFirst: savedSettings.humanFirst, cutoff: savedSettings.cutline };
@@ -534,8 +541,8 @@ function MultiplayerRoomPopup({
                   isHost ? (
                     <SelectField value={p.modelId} onChange={(v) => onModelChange(i, v)}>
                       {MODEL_OPTIONS.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
+                        <option key={m.value} value={m.value}>
+                          {m.label}
                         </option>
                       ))}
                     </SelectField>

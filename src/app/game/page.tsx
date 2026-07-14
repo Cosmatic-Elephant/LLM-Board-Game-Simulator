@@ -19,6 +19,9 @@ const DIE_STAGGER_MS      = 100;  // delay added per die index (sequential appea
 const SCORING_FADE_MS     = 400;  // base duration for every scoring animation step
 const LLM_ROLL_DELAY_MS   = 500;  // delay before LLM auto-roll
 const LLM_PLACE_DELAY_MS  = 500;  // delay before LLM API call (post-roll)
+// 모든 플레이어의 주사위가 소진되어 정산으로 넘어가기 전, 안내 문구를 보여주며 대기하는 시간
+// (멀티플레이 multi/page.tsx의 PRE_SCORING_WAIT_MS와 동일한 값).
+const PRE_SCORING_WAIT_MS = 1500;
 
 const PLAYER_CONFIG_KEY   = "las-vegas:playerConfig";
 const GAME_SETTINGS_KEY   = "las-vegas:gameSettings";
@@ -133,6 +136,9 @@ export default function GamePage() {
   const placingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scoringAnim, setScoringAnim]         = useState<ScoringAnimState | null>(null);
   const scoringTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // 정산 연출이 시작되기 전, PRE_SCORING_WAIT_MS 동안 안내 문구만 보여주며 대기하는 중인지 여부.
+  const [scoringPending, setScoringPending]   = useState(false);
+  const scoringPendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [displayScores, setDisplayScores]     = useState<Record<Color, number>>({ ...EMPTY_DICE });
   const finalScoresRef = useRef<Record<Color, number>>({ ...EMPTY_DICE });
   const initialPlayersRef = useRef<PlayerState[]>(INITIAL_PLAYERS);
@@ -227,6 +233,7 @@ export default function GamePage() {
       if (rollingIntervalRef.current) clearInterval(rollingIntervalRef.current);
       if (rollingTimeoutRef.current) clearTimeout(rollingTimeoutRef.current);
       if (placingTimerRef.current) clearTimeout(placingTimerRef.current);
+      if (scoringPendingTimeoutRef.current) clearTimeout(scoringPendingTimeoutRef.current);
       for (const t of scoringTimersRef.current) clearTimeout(t);
       for (const info of Object.values(bubbleTimersRef.current)) { if (info?.timerId) clearTimeout(info.timerId); }
     };
@@ -240,7 +247,7 @@ export default function GamePage() {
   useEffect(() => {
     const currentPlayer = players[currentPlayerIndex];
     if (!currentPlayer?.isLLM) return;
-    if (roundEnded || scoringAnim !== null) return;
+    if (roundEnded || scoringAnim !== null || scoringPending) return;
 
     // ── Phase 1: pre-roll ───────────────────────────────────────────────────
     if (turnPhase === "pre-roll") {
@@ -345,16 +352,6 @@ export default function GamePage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turn, currentPlayerIndex, turnPhase]);
-
-  // TEST ONLY — delete before release
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "q" || e.key === "Q") qHandlerRef.current();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const current = players[currentPlayerIndex];
 
@@ -600,7 +597,10 @@ export default function GamePage() {
       setExitingCasino(null);
       setIsPlacingDice(false);
 
-      // All players exhausted → start scoring animation
+      // All players exhausted → wait PRE_SCORING_WAIT_MS with a banner, then start scoring animation.
+      // Actual state (casinos/players/etc.) is committed immediately per the "즉시 적용" principle;
+      // only the animation itself is delayed. runScoringAnimation() clears bubbles at its own start,
+      // so the last bet's bubble stays visible through the wait and disappears exactly when it begins.
       if (nextPlayers.every((p) => p.diceRemaining === 0)) {
         const activeColors = players.map((p) => p.color);
         const scoringSteps = computeScoringSteps(nextCasinos, activeColors);
@@ -609,7 +609,12 @@ export default function GamePage() {
         setRoll([]);
         setTurnPhase("pre-roll");
         setTurn((t) => t + 1);
-        runScoringAnimation(scoringSteps, billDeck, activeColors);
+        setScoringPending(true);
+        scoringPendingTimeoutRef.current = setTimeout(() => {
+          scoringPendingTimeoutRef.current = null;
+          setScoringPending(false);
+          runScoringAnimation(scoringSteps, billDeck, activeColors);
+        }, PRE_SCORING_WAIT_MS);
         return;
       }
 
@@ -662,9 +667,11 @@ export default function GamePage() {
     if (rollingIntervalRef.current) { clearInterval(rollingIntervalRef.current); rollingIntervalRef.current = null; }
     if (rollingTimeoutRef.current)  { clearTimeout(rollingTimeoutRef.current);  rollingTimeoutRef.current  = null; }
     if (placingTimerRef.current)    { clearTimeout(placingTimerRef.current);    placingTimerRef.current    = null; }
+    if (scoringPendingTimeoutRef.current) { clearTimeout(scoringPendingTimeoutRef.current); scoringPendingTimeoutRef.current = null; }
     for (const t of scoringTimersRef.current) clearTimeout(t);
     scoringTimersRef.current = [];
     setScoringAnim(null);
+    setScoringPending(false);
     setScoreDeltaPopups({});
     setExitingCasino(null);
     setIsPlacingDice(false);
@@ -705,32 +712,174 @@ export default function GamePage() {
   // scoring   : all bright (dice/bills visible for animation), none clickable
   function casinoCanPlace(n: number): boolean {
     if (roundEnded) return false;
-    if (scoringAnim !== null) return true;
+    if (scoringAnim !== null || scoringPending) return true;
     return turnPhase === "pre-roll" || turnPhase === "rolling" || rollFaces.has(n);
   }
 
   function casinoSelectable(n: number): boolean {
-    if (roundEnded || isPlacingDice || scoringAnim !== null) return false;
+    if (roundEnded || isPlacingDice || scoringAnim !== null || scoringPending) return false;
     if (current.isLLM) return false;
     return turnPhase === "post-roll" && rollFaces.has(n);
   }
 
-  // Button fade-in starts exactly when the last die's fade-in ends
-  // TEST ONLY — delete before release
-  const qHandlerRef = useRef<() => void>(() => {});
-  qHandlerRef.current = () => {
-    if (roundEnded || scoringAnim !== null) return;
-    if (turnPhase === "pre-roll") {
-      handleRoll();
-    } else if (turnPhase === "post-roll" && !isPlacingDice) {
-      const candidates = CASINO_NUMBERS.filter((n) => rollFaces.has(n));
-      if (!candidates.length) return;
-      handleCasinoSelect(candidates[Math.floor(Math.random() * candidates.length)]);
-    }
-  };
+  // 플레이어 패널 위에 "생각 중..."(또는 정산 중 소지금 증가 팝업)과 베팅 말풍선을 조건부로 얹어
+  // 렌더링한다. 진행 중 화면/라운드 종료/게임 종료 화면에서 모두 재사용한다(멀티플레이
+  // multi/page.tsx의 renderPlayerPanel과 동일한 패턴).
+  function renderPlayerPanel(player: PlayerState, label: string, isActive: boolean, displayScore?: number) {
+    const bubble = bubbles[player.color];
+    const popup = scoringAnim !== null ? scoreDeltaPopups[player.color] : undefined;
+
+    return (
+      <div key={player.color} className="flex flex-col items-center gap-1">
+        {popup ? (
+          <p
+            key={popup.key}
+            className="text-xl font-bold text-yellow-300"
+            style={{ animation: "score-popup 1200ms ease-out forwards" }}
+          >
+            +{popup.amount.toLocaleString()}
+          </p>
+        ) : (
+          <p className={`text-xs text-yellow-400 animate-pulse ${isActive ? "" : "invisible"}`}>
+            생각 중...
+          </p>
+        )}
+        <div className="relative">
+          {bubble && (
+            <div
+              key={bubble.key}
+              className="absolute bottom-full mb-3 w-[150px] z-10"
+              style={{ animation: "bubble-in 200ms ease-out forwards" }}
+              onMouseEnter={() => handleBubbleMouseEnter(player.color)}
+              onMouseLeave={() => handleBubbleMouseLeave(player.color)}
+            >
+              <div className="relative bg-zinc-700 border border-zinc-500 rounded-xl px-3 py-2 shadow-lg">
+                <p className="text-xs text-gray-200 leading-relaxed break-words">
+                  {bubble.casinoNumber}번 카지노에 베팅했어요.
+                  {bubble.reasoning && ` ${bubble.reasoning}`}
+                </p>
+                {/* 말풍선 꼬리 — 테두리 레이어 */}
+                <div style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid #71717a" }} />
+                {/* 말풍선 꼬리 — 채우기 레이어 */}
+                <div style={{ position: "absolute", bottom: -7, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "7px solid transparent", borderRight: "7px solid transparent", borderTop: "7px solid #3f3f46" }} />
+              </div>
+            </div>
+          )}
+          <PlayerPanel player={player} label={label} isActive={isActive} displayScore={displayScore} />
+        </div>
+      </div>
+    );
+  }
+
+  // 우측 하단 고정 나가기 버튼 + 확인 팝업. 진행 중/라운드 종료/게임 종료 화면 모두에서 재사용한다.
+  function renderExitControls() {
+    return (
+      <>
+        <button
+          className="fixed right-4 bottom-28 w-12 h-12 rounded-full bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 border border-zinc-600 flex items-center justify-center transition-colors shadow-lg"
+          onClick={() => setShowExitConfirm(true)}
+          aria-label="나가기"
+        >
+          <Image src="/img/exit.png" alt="나가기" width={24} height={24} />
+        </button>
+
+        {showExitConfirm && (
+          <div
+            className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+            onClick={() => setShowExitConfirm(false)}
+          >
+            <div
+              className="bg-zinc-800 border border-zinc-600 rounded-2xl px-8 py-6 flex flex-col items-center gap-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-sm font-semibold text-white">메인 화면으로 돌아가시겠습니까?</span>
+              <div className="flex gap-3">
+                <button
+                  className="px-6 py-2.5 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl text-sm font-bold transition-colors"
+                  onClick={handleGoMain}
+                >
+                  예
+                </button>
+                <button
+                  className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl text-sm font-bold transition-colors"
+                  onClick={() => setShowExitConfirm(false)}
+                >
+                  아니오
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // ── 라운드 종료: 카지노/보드 없이 플레이어 패널이 화면 중앙에 오는 레이아웃(멀티플레이와 동일) ──
+  if (roundEnded && !gameOver) {
+    return (
+      <main key="round-end" className="h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-6">
+        <span className="text-2xl font-bold text-yellow-400">라운드 종료</span>
+        <section className="flex gap-4 justify-center">
+          {players.map((player, i) => renderPlayerPanel(player, player.name ?? `플레이어 ${i + 1}`, false))}
+        </section>
+        <div className="flex gap-3">
+          {nextRound && (
+            <button
+              className="px-6 py-3 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl font-bold text-sm transition-colors"
+              onClick={handleNextRound}
+            >
+              다음 라운드
+            </button>
+          )}
+          <button
+            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl font-bold text-sm transition-colors"
+            onClick={handleGameOver}
+          >
+            게임 종료
+          </button>
+        </div>
+        {renderExitControls()}
+      </main>
+    );
+  }
+
+  // ── 게임 종료: 최종 소지금과 우승자 표시 (멀티플레이와 동일한 문구·버튼 구성) ──
+  if (gameOver) {
+    const maxScore = Math.max(...players.map((p) => p.score));
+    const winnerNames = players
+      .filter((p) => p.score === maxScore)
+      .map((p) => p.name ?? p.color)
+      .join(", ");
+
+    return (
+      <main key="game-over" className="h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-6">
+        <span className="text-xl font-bold text-yellow-300">
+          {winnerNames}가 {maxScore.toLocaleString()}원으로 우승!
+        </span>
+        <section className="flex gap-4 justify-center">
+          {players.map((player, i) => renderPlayerPanel(player, player.name ?? `플레이어 ${i + 1}`, false))}
+        </section>
+        <div className="flex gap-3">
+          <button
+            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl font-bold text-sm transition-colors"
+            onClick={handleGoMain}
+          >
+            나가기
+          </button>
+          <button
+            className="px-6 py-3 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl font-bold text-sm transition-colors"
+            onClick={handleRestart}
+          >
+            다시하기
+          </button>
+        </div>
+        {renderExitControls()}
+      </main>
+    );
+  }
 
   return (
-    <main className="h-screen bg-zinc-950 text-white flex flex-col p-4 gap-5 overflow-hidden">
+    <main key="play" className="h-screen bg-zinc-950 text-white flex flex-col p-4 gap-5 overflow-hidden">
 
       {/* ── Casinos ─────────────────────────────────────────────────────── */}
       <section className="grid grid-cols-6 gap-3">
@@ -765,67 +914,22 @@ export default function GamePage() {
       {/* ── Middle: dice ────────────────────────────────────────────────── */}
       <section className="flex-1 flex flex-col justify-center gap-3">
 
-        {/* Dice row / round-end buttons — centered */}
+        {/* Dice row / 정산 대기·정산 중 안내 — centered */}
         <div className="flex flex-col items-center gap-3">
-          {scoringAnim !== null && !roundEnded ? (
-            <button
-              className="px-5 py-2.5 bg-gray-700/60 hover:bg-gray-600/60 active:bg-gray-800/60 rounded-xl text-sm font-bold text-gray-400 hover:text-gray-200 transition-colors"
-              onClick={handleSkipScoring}
-            >
-              스킵
-            </button>
-          ) : roundEnded ? (
-            gameOver ? (
-              <div className="flex flex-col items-center gap-4">
-                {(() => {
-                  const maxScore = Math.max(...players.map((p) => p.score));
-                  const names = players
-                    .filter((p) => p.score === maxScore)
-                    .map((p) => p.name ?? p.color)
-                    .join(", ");
-                  return (
-                    <span className="text-base font-bold text-yellow-300">
-                      최종 소지금 {maxScore.toLocaleString()}으로 {names} 우승!
-                    </span>
-                  );
-                })()}
-                <span className="text-2xl font-bold text-white">게임 종료</span>
-                <div className="flex gap-3">
-                  <button
-                    className="px-6 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl font-bold text-sm transition-colors"
-                    onClick={handleGoMain}
-                  >
-                    메인화면으로
-                  </button>
-                  <button
-                    className="px-6 py-3 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl font-bold text-sm transition-colors"
-                    onClick={handleRestart}
-                  >
-                    다시하기
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center gap-4">
-                <span className="text-2xl font-bold text-yellow-400">라운드 종료</span>
-                <div className="flex gap-3">
-                  {nextRound && (
-                    <button
-                      className="px-6 py-3 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl font-bold text-sm transition-colors"
-                      onClick={handleNextRound}
-                    >
-                      다음 라운드
-                    </button>
-                  )}
-                  <button
-                    className="px-6 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl font-bold text-sm transition-colors"
-                    onClick={handleGameOver}
-                  >
-                    게임 종료
-                  </button>
-                </div>
-              </div>
-            )
+          {scoringPending ? (
+            <span className="text-lg font-bold text-yellow-300 select-none">
+              라운드 종료 / 정산을 시작합니다.
+            </span>
+          ) : scoringAnim !== null ? (
+            <>
+              <span className="text-sm text-gray-400 select-none">정산 중</span>
+              <button
+                className="px-5 py-2.5 bg-gray-700/60 hover:bg-gray-600/60 active:bg-gray-800/60 rounded-xl text-sm font-bold text-gray-400 hover:text-gray-200 transition-colors"
+                onClick={handleSkipScoring}
+              >
+                스킵
+              </button>
+            </>
           ) : (
             <>
               {/* Dice row — pre-roll: animated blank / rolling: shuffling / post-roll: grouped */}
@@ -892,93 +996,17 @@ export default function GamePage() {
 
       {/* ── Player panels ───────────────────────────────────────────────── */}
       <section className="flex gap-4 justify-center">
-        {players.map((player, i) => {
-          const isActive = i === currentPlayerIndex && !roundEnded;
-          return (
-            <div key={player.color} className="flex flex-col items-center gap-1">
-              {scoringAnim !== null && scoreDeltaPopups[player.color] ? (
-                <p
-                  key={scoreDeltaPopups[player.color]!.key}
-                  className="text-sm font-bold text-yellow-300"
-                  style={{ animation: "score-popup 1200ms ease-out forwards" }}
-                >
-                  +{scoreDeltaPopups[player.color]!.amount.toLocaleString()}
-                </p>
-              ) : (
-                <p className={`text-xs text-yellow-400 animate-pulse ${isActive ? "" : "invisible"}`}>
-                  생각 중...
-                </p>
-              )}
-              <div className="relative">
-                {bubbles[player.color] && (
-                  <div
-                    key={bubbles[player.color]!.key}
-                    className="absolute bottom-full mb-3 w-[150px] z-10"
-                    style={{ animation: "bubble-in 200ms ease-out forwards" }}
-                    onMouseEnter={() => handleBubbleMouseEnter(player.color)}
-                    onMouseLeave={() => handleBubbleMouseLeave(player.color)}
-                  >
-                    <div className="relative bg-zinc-700 border border-zinc-500 rounded-xl px-3 py-2 shadow-lg">
-                      <p className="text-xs text-gray-200 leading-relaxed break-words">
-                        {bubbles[player.color]!.casinoNumber}번 카지노에 베팅했어요.
-                        {bubbles[player.color]!.reasoning && ` ${bubbles[player.color]!.reasoning}`}
-                      </p>
-                      {/* 말풍선 꼬리 — 테두리 레이어 */}
-                      <div style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid #71717a" }} />
-                      {/* 말풍선 꼬리 — 채우기 레이어 */}
-                      <div style={{ position: "absolute", bottom: -7, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "7px solid transparent", borderRight: "7px solid transparent", borderTop: "7px solid #3f3f46" }} />
-                    </div>
-                  </div>
-                )}
-                <PlayerPanel
-                  player={player}
-                  label={player.name ?? `플레이어 ${i + 1}`}
-                  isActive={isActive}
-                  displayScore={scoringAnim !== null ? displayScores[player.color] : undefined}
-                />
-              </div>
-            </div>
-          );
-        })}
+        {players.map((player, i) =>
+          renderPlayerPanel(
+            player,
+            player.name ?? `플레이어 ${i + 1}`,
+            i === currentPlayerIndex,
+            scoringAnim !== null ? displayScores[player.color] : undefined
+          )
+        )}
       </section>
 
-      {/* ── Floating exit button ────────────────────────────────────────── */}
-      <button
-        className="fixed right-4 bottom-28 w-12 h-12 rounded-full bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 border border-zinc-600 flex items-center justify-center transition-colors shadow-lg"
-        onClick={() => setShowExitConfirm(true)}
-        aria-label="나가기"
-      >
-        <Image src="/img/exit.png" alt="나가기" width={24} height={24} />
-      </button>
-
-      {/* ── Exit confirmation modal ──────────────────────────────────────── */}
-      {showExitConfirm && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
-          onClick={() => setShowExitConfirm(false)}
-        >
-          <div
-            className="bg-zinc-800 border border-zinc-600 rounded-2xl px-8 py-6 flex flex-col items-center gap-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className="text-sm font-semibold text-white">메인 화면으로 돌아가시겠습니까?</span>
-            <div className="flex gap-3">
-              <button
-                className="px-6 py-2.5 bg-blue-700 hover:bg-blue-600 active:bg-blue-800 rounded-xl text-sm font-bold transition-colors"
-                onClick={handleGoMain}
-              >
-                예
-              </button>
-              <button
-                className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl text-sm font-bold transition-colors"
-                onClick={() => setShowExitConfirm(false)}
-              >
-                아니오
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {renderExitControls()}
 
     </main>
   );

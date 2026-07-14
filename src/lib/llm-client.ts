@@ -2,12 +2,15 @@ import type { LLMGameState, LLMResponse, Action, CasinoNumber } from "@/types/ga
 
 // ─── Provider Detection ───────────────────────────────────────────────────────
 
-type Provider = "anthropic" | "openai" | "google";
+type Provider = "anthropic" | "openai" | "google" | "nvidia";
 
 function detectProvider(modelId: string): Provider {
   if (modelId.startsWith("claude")) return "anthropic";
   if (modelId.startsWith("gpt") || modelId.startsWith("o1") || modelId.startsWith("o3")) return "openai";
   if (modelId.startsWith("gemini")) return "google";
+  // NVIDIA NIM 카탈로그 모델은 "meta/llama-3.1-70b-instruct"처럼 항상 네임스페이스/모델명 형태(슬래시 포함)이며,
+  // NVIDIA API 키 자체도 "nvapi-" 접두사를 쓴다.
+  if (modelId.startsWith("nvapi-") || modelId.includes("/")) return "nvidia";
   throw new Error(`Cannot detect provider for model: ${modelId}`);
 }
 
@@ -137,6 +140,30 @@ async function callOpenAI(
   return parseResponse(text, payload);
 }
 
+async function callNvidia(
+  modelId: string,
+  payload: LLMGameState
+): Promise<LLMResponse> {
+  // NVIDIA NIM은 OpenAI 호환 API를 제공하므로 openai SDK를 그대로 재사용하고, baseURL/apiKey만 교체한다.
+  const OpenAI = (await import("openai")).default;
+  const client = new OpenAI({
+    apiKey: process.env.NVIDIA_API_KEY,
+    baseURL: "https://integrate.api.nvidia.com/v1",
+  });
+
+  const completion = await client.chat.completions.create({
+    model: modelId,
+    max_tokens: 700,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: JSON.stringify(payload, null, 2) },
+    ],
+  });
+
+  const text = completion.choices[0]?.message?.content ?? "";
+  return parseResponse(text, payload);
+}
+
 async function callGoogle(
   modelId: string,
   payload: LLMGameState
@@ -215,6 +242,8 @@ export async function getLLMAction(
       return callOpenAI(modelId, payload);
     case "google":
       return callGoogle(modelId, payload);
+    case "nvidia":
+      return callNvidia(modelId, payload);
   }
 }
 

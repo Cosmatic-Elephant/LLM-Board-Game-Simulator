@@ -31,6 +31,8 @@ const DIE_STAGGER_MS     = 100; // 주사위 순차 등장 간격(개당 지연)
 const LLM_PLACE_DELAY_MS = 500;
 // 정산 연출 각 단계의 기본 지속 시간(싱글플레이 game/page.tsx와 동일한 값).
 const SCORING_FADE_MS = 400;
+// 모든 플레이어의 주사위가 소진되어 정산으로 넘어가기 전, 안내 문구를 보여주며 대기하는 시간.
+const PRE_SCORING_WAIT_MS = 1500;
 
 // 턴 연출 로컬 상태 — 서버가 보내는 GameState를 즉시 반영하지 않고, 애니메이션이 끝난 뒤에만
 // commit()으로 반영한다(그동안 화면은 이전 상태를 계속 보여준다).
@@ -68,6 +70,11 @@ export default function MultiplayerGamePage() {
   // 게스트 이탈("{이름}이 이탈했습니다.")과 턴 타임아웃 자동 행동 알림이 함께 재사용하는 말풍선.
   const [noticeBubbles, setNoticeBubbles] = useState<Partial<Record<Color, { message: string; key: number }>>>({});
   const noticeBubbleTimersRef = useRef<Partial<Record<Color, ReturnType<typeof setTimeout>>>>({});
+  // 정산 진입 직전(awaiting-action → round-end/game-end) 화면 트리 전체가 다른 return 분기로 교체되면서
+  // 말풍선 DOM도 함께 리마운트된다. key는 그대로라 React 재조정만으로는 막을 수 없으므로, 실제로 진입
+  // 애니메이션이 "끝난" 말풍선의 key를 색상별로 기억해 두었다가, 같은 key가 다시 마운트되면(=리마운트) 진입
+  // 애니메이션을 재생하지 않고 바로 정지 상태로 보여준다. 진짜 새 말풍선(key가 다름)에는 영향 없다.
+  const bubbleEnteredKeyRef = useRef<Partial<Record<Color, number>>>({});
   // 현재 사람 플레이어 턴의 타임아웃 마감 시각(서버 기준 epoch ms). null이면 타이머가 걸려 있지 않다(AI 턴 등).
   const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   // turnDeadline을 기준으로 클라이언트가 매 tick 스스로 계산하는 남은 초. 서버는 deadline만 한 번 알리고,
@@ -78,6 +85,10 @@ export default function MultiplayerGamePage() {
   const [hoveredDiceFace, setHoveredDiceFace] = useState<number | null>(null);
   // 우측 하단 나가기 버튼의 확인 팝업 노출 여부.
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  // 라운드 종료 화면에서 "게임 종료"를 눌러 로컬로 우승 화면을 띄운 상태인지 여부. 서버 phase는 여전히
+  // round-end로 남아있으므로(다른 클라이언트는 계속 라운드 종료 화면을 본다), 이 클라이언트에서만
+  // game-end 화면을 대신 렌더링하기 위한 클라이언트 전용 플래그다.
+  const [manualGameEnd, setManualGameEnd] = useState(false);
 
   // ── 턴 연출 상태 ────────────────────────────────────────────────────────────
   // gameState(렌더용)는 애니메이션이 진행되는 동안 "이전" 상태를 그대로 유지한다.
@@ -114,6 +125,11 @@ export default function MultiplayerGamePage() {
   // scoringAnim이 null이 아니면 phase가 이미 round-end/game-end로 커밋돼 있어도 그 화면 대신
   // 카지노 그리드 + 연출을 렌더링한다(아래 return 로직 참고).
   const [scoringAnim, setScoringAnim] = useState<ScoringAnimState | null>(null);
+  // 정산 연출이 시작되기 전, PRE_SCORING_WAIT_MS 동안 안내 문구만 보여주며 대기하는 중인지 여부.
+  // 이 시점에는 scoringAnim이 아직 null이므로, 별도로 화면 분기를 유지해야 round-end/game-end 최종
+  // 화면이 먼저 노출되는 것을 막을 수 있다.
+  const [scoringPending, setScoringPending] = useState(false);
+  const scoringPendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 정산 전 카지노 보드(주사위·지폐) 스냅샷 — 서버가 applyScoring 직전 상태를 그대로 보내준다.
   // gameState.casinos는 이미 정산으로 초기화돼 있으므로, 연출 중에는 이 값으로 Casino를 렌더링한다.
   const [scoringCasinos, setScoringCasinos] = useState<Record<CasinoNumber, CasinoState> | null>(null);
@@ -294,6 +310,13 @@ export default function MultiplayerGamePage() {
     committedStateRef.current = next;
     setGameState(next);
 
+    // manualGameEnd는 라운드 종료 화면에서 "게임 종료"를 눌러 로컬로만 우승 화면을 띄운 상태다.
+    // 다시하기/다음 라운드 등으로 실제 게임이 재개되면(phase가 더 이상 round-end/game-end가 아니면)
+    // 다음에 다시 라운드 종료 화면을 마주쳤을 때 정상적으로 뜨도록 초기화한다.
+    if (next.phase !== "round-end" && next.phase !== "game-end") {
+      setManualGameEnd(false);
+    }
+
     if (next.phase === "rolling") {
       const signature = `${next.round}:${next.turn}:${next.currentPlayerIndex}`;
       if (lastPreRollSigRef.current !== signature) {
@@ -363,7 +386,18 @@ export default function MultiplayerGamePage() {
         if (scoringPayload) {
           // 실제 상태(점수·billDeck 등)는 원칙대로 즉시 반영하고, 정산 연출만 별도로 재생한다.
           commit(next);
-          startScoringAnimation(prev, next, scoringPayload);
+          // 정산 연출 시작 전 PRE_SCORING_WAIT_MS만큼 안내 문구를 보여주며 대기한다. 이 기간에는
+          // 아직 정산 전 카지노 스냅샷만 미리 보여주고(하이라이트 없음), 대기가 끝나면 남은 말풍선을
+          // 모두 정리한 뒤 실제 정산 연출을 시작한다.
+          isAnimatingRef.current = true;
+          setScoringCasinos(scoringPayload.casinos);
+          setScoringPending(true);
+          scoringPendingTimeoutRef.current = setTimeout(() => {
+            scoringPendingTimeoutRef.current = null;
+            setScoringPending(false);
+            clearAllNoticeBubbles();
+            startScoringAnimation(prev, next, scoringPayload);
+          }, PRE_SCORING_WAIT_MS);
           return;
         }
       }
@@ -452,6 +486,13 @@ export default function MultiplayerGamePage() {
     }, NOTICE_BUBBLE_DURATION_MS);
   }
 
+  // 정산 연출 진입 직전, 남아있는 말풍선을 hover 등 상태와 무관하게 전부 제거한다.
+  function clearAllNoticeBubbles() {
+    for (const t of Object.values(noticeBubbleTimersRef.current)) { if (t) clearTimeout(t); }
+    noticeBubbleTimersRef.current = {};
+    setNoticeBubbles({});
+  }
+
   useEffect(() => {
     const socket = getSocket();
 
@@ -535,6 +576,7 @@ export default function MultiplayerGamePage() {
       if (shuffleTimeoutRef.current) clearTimeout(shuffleTimeoutRef.current);
       if (betExitTimeoutRef.current) clearTimeout(betExitTimeoutRef.current);
       if (rollRevealDelayTimeoutRef.current) clearTimeout(rollRevealDelayTimeoutRef.current);
+      if (scoringPendingTimeoutRef.current) clearTimeout(scoringPendingTimeoutRef.current);
       for (const t of scoringTimersRef.current) clearTimeout(t);
     };
   }, []);
@@ -600,18 +642,22 @@ export default function MultiplayerGamePage() {
     getSocket().emit("next-round");
   }
 
-  // 호스트일 때만 서버에 게임 종료를 알려 전원에게 game-ended를 브로드캐스트시킨다.
-  // 게스트가 누르면(자기 자신만) 그냥 로비로 돌아간다 — 서버는 이를 일반 이탈로 처리해 해당 슬롯을 깡통으로 대체한다.
-  function handleEndGame() {
-    if (isHost) {
-      getSocket().emit("end-game");
-      return;
-    }
-    router.push("/");
+  // 라운드 종료 화면의 "게임 종료" — 서버에 알리지 않고 이 클라이언트만 로컬로 우승 화면을 띄운다.
+  // 다른 클라이언트는 계속 라운드 종료 화면(다음 라운드/게임 종료 버튼)을 본다.
+  function handleShowGameEnd() {
+    setManualGameEnd(true);
   }
 
-  // 나가기 확인 팝업의 "예" — 기존 이탈 처리 로직(server.ts의 removeParticipant/handleParticipantLeaveDuringGame)을
-  // 그대로 재사용한다. 호스트는 end-game(게임 종료 + 전원 퇴장), 게스트는 leave-room(본인 슬롯만 깡통 대체)을 보낸다.
+  // 우승 화면의 "다시하기"(호스트 전용) — 서버가 동일한 플레이어 구성으로 게임을 재초기화하고
+  // 방 전체에 game-state를 브로드캐스트한다. 응답을 받으면 commit()이 manualGameEnd를 자동으로 해제한다.
+  function handleRestartGame() {
+    if (!isHost) return;
+    getSocket().emit("restart-game");
+  }
+
+  // 나가기 확인 팝업의 "예" 및 우승 화면의 "나가기" — 기존 이탈 처리 로직(server.ts의
+  // removeParticipant/handleParticipantLeaveDuringGame)을 그대로 재사용한다. 호스트는 end-game(게임 종료 +
+  // 전원 퇴장), 게스트는 leave-room(본인 슬롯만 깡통 대체)을 보낸다.
   function handleExitConfirm() {
     if (isHost) {
       getSocket().emit("end-game");
@@ -634,7 +680,7 @@ export default function MultiplayerGamePage() {
         {popup ? (
           <p
             key={popup.key}
-            className="text-sm font-bold text-yellow-300"
+            className="text-xl font-bold text-yellow-300"
             style={{ animation: "score-popup 1200ms ease-out forwards" }}
           >
             +{popup.amount.toLocaleString()}
@@ -649,7 +695,14 @@ export default function MultiplayerGamePage() {
             <div
               key={bubble.key}
               className="absolute bottom-full mb-3 w-[150px] z-10"
-              style={{ animation: "bubble-in 200ms ease-out forwards" }}
+              style={
+                bubbleEnteredKeyRef.current[player.color] === bubble.key
+                  ? undefined
+                  : { animation: "bubble-in 200ms ease-out forwards" }
+              }
+              onAnimationEnd={() => {
+                bubbleEnteredKeyRef.current[player.color] = bubble.key;
+              }}
             >
               <div className="relative bg-zinc-700 border border-zinc-500 rounded-xl px-3 py-2 shadow-lg">
                 <p className="text-xs text-gray-200 leading-relaxed break-words whitespace-pre-line">
@@ -745,13 +798,19 @@ export default function MultiplayerGamePage() {
   const { casinos, players, round, billDeck, currentPlayerIndex, phase, currentRoll } = gameState;
 
   // ── 정산 연출: gameState.phase는 이미 round-end/game-end로 커밋돼 있어도(실제 데이터는 즉시 반영
-  // 원칙), scoringAnim이 남아있는 동안은 그 화면 대신 카지노 그리드 + 연출을 그대로 보여준다.
-  if (scoringAnim !== null) {
+  // 원칙), scoringAnim이 남아있거나(연출 재생 중) scoringPending이 켜져 있는(연출 시작 전 대기) 동안은
+  // 그 화면 대신 카지노 그리드 + 연출을 그대로 보여준다.
+  if (scoringAnim !== null || scoringPending) {
+    const anim = scoringAnim;
     return (
-      <main className="h-screen bg-zinc-950 text-white flex flex-col p-4 gap-5 overflow-hidden">
+      // key="scoring" — 게임 진행 화면과 구조가 부분적으로 겹쳐(같은 태그가 같은 위치에 오는 경우 등)
+      // React가 엉뚱한 자식(예: 이전에 활성 표시로 위로 이동해 있던 플레이어 패널)을 그대로 재사용하는
+      // 것을 막는다. 화면 종류가 바뀔 때마다 항상 완전히 새로 마운트시켜, 정산 시작 시점에 모든 패널이
+      // 기본 위치(isActive=false)로 확실히 리셋되도록 한다.
+      <main key="scoring" className="h-screen bg-zinc-950 text-white flex flex-col p-4 gap-5 overflow-hidden">
         <section className="grid grid-cols-6 gap-3">
           {CASINO_NUMBERS.map((n, idx) => {
-            const isCurrentCasino = scoringAnim.casinoIdx === idx && !scoringAnim.tableClearing;
+            const isCurrentCasino = anim !== null && anim.casinoIdx === idx && !anim.tableClearing;
             return (
               <Casino
                 key={n}
@@ -760,13 +819,13 @@ export default function MultiplayerGamePage() {
                 canPlace={true}
                 selectable={false}
                 highlighted={isCurrentCasino}
-                scoringFadingColors={isCurrentCasino ? scoringAnim.fadingColors : undefined}
-                scoringEliminatedColors={scoringAnim.eliminatedColorsByCasino[idx]}
-                scoringHighlightedColor={isCurrentCasino ? scoringAnim.winnerColor : undefined}
-                scoringHighlightedBillIdx={isCurrentCasino ? scoringAnim.highlightedBillIdx : undefined}
-                scoringExitingBillIdx={isCurrentCasino ? scoringAnim.exitingBillIdx : undefined}
-                scoringExitedBillIndices={scoringAnim.exitedBillsByCasino[idx]}
-                scoringTableClearing={scoringAnim.tableClearing}
+                scoringFadingColors={isCurrentCasino ? anim!.fadingColors : undefined}
+                scoringEliminatedColors={anim?.eliminatedColorsByCasino[idx]}
+                scoringHighlightedColor={isCurrentCasino ? anim!.winnerColor : undefined}
+                scoringHighlightedBillIdx={isCurrentCasino ? anim!.highlightedBillIdx : undefined}
+                scoringExitingBillIdx={isCurrentCasino ? anim!.exitingBillIdx : undefined}
+                scoringExitedBillIndices={anim?.exitedBillsByCasino[idx]}
+                scoringTableClearing={anim?.tableClearing ?? false}
                 fadeDuration={SCORING_FADE_MS}
                 onHover={() => {}}
               />
@@ -775,19 +834,24 @@ export default function MultiplayerGamePage() {
         </section>
 
         <section className="flex-1 flex flex-col justify-center items-center gap-3">
-          {isHost && (
-            <button
-              className="px-5 py-2.5 bg-gray-700/60 hover:bg-gray-600/60 active:bg-gray-800/60 rounded-xl text-sm font-bold text-gray-400 hover:text-gray-200 transition-colors"
-              onClick={handleSkipScoring}
-            >
-              스킵
-            </button>
+          {scoringPending ? (
+            <span className="text-lg font-bold text-yellow-300 select-none">
+              라운드 종료 / 정산을 시작합니다.
+            </span>
+          ) : (
+            <>
+              <span className="text-sm text-gray-400 select-none">정산 중</span>
+              {isHost && (
+                <button
+                  className="px-5 py-2.5 bg-gray-700/60 hover:bg-gray-600/60 active:bg-gray-800/60 rounded-xl text-sm font-bold text-gray-400 hover:text-gray-200 transition-colors"
+                  onClick={handleSkipScoring}
+                >
+                  스킵
+                </button>
+              )}
+            </>
           )}
         </section>
-
-        <div className="flex justify-center">
-          <span className="text-sm text-gray-400 select-none">정산 중...</span>
-        </div>
 
         <section className="flex gap-4 justify-center">
           {players.map((player, i) =>
@@ -801,9 +865,9 @@ export default function MultiplayerGamePage() {
   }
 
   // ── 라운드 종료: 정산 결과(소지금) 표시 + 다음 라운드(호스트 전용)/게임 종료 버튼 ──
-  if (phase === "round-end") {
+  if (phase === "round-end" && !manualGameEnd) {
     return (
-      <main className="h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-6">
+      <main key="round-end" className="h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-6">
         <span className="text-2xl font-bold text-yellow-400">라운드 종료</span>
         <section className="flex gap-4 justify-center">
           {players.map((player, i) => renderPlayerPanel(player, player.name ?? `플레이어 ${i + 1}`, false))}
@@ -821,7 +885,7 @@ export default function MultiplayerGamePage() {
           </button>
           <button
             className="px-6 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl font-bold text-sm transition-colors"
-            onClick={handleEndGame}
+            onClick={handleShowGameEnd}
           >
             게임 종료
           </button>
@@ -831,8 +895,9 @@ export default function MultiplayerGamePage() {
     );
   }
 
-  // ── 게임 종료: 최종 소지금과 우승자 표시 ──
-  if (phase === "game-end") {
+  // ── 게임 종료: 최종 소지금과 우승자 표시 (지폐 소진으로 자연 종료됐거나, 라운드 종료 화면에서
+  // "게임 종료"를 눌러 이 클라이언트만 로컬로 진입한 경우 둘 다 이 화면을 보여준다) ──
+  if (phase === "game-end" || manualGameEnd) {
     const maxScore = Math.max(...players.map((p) => p.score));
     const winnerNames = players
       .filter((p) => p.score === maxScore)
@@ -840,16 +905,31 @@ export default function MultiplayerGamePage() {
       .join(", ");
 
     return (
-      <main className="h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-6">
-        <div className="flex flex-col items-center gap-4">
-          <span className="text-base font-bold text-yellow-300">
-            최종 소지금 {maxScore.toLocaleString()}으로 {winnerNames} 우승!
-          </span>
-          <span className="text-2xl font-bold text-white">게임 종료</span>
-        </div>
+      <main key="game-end" className="h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-6">
+        <span className="text-xl font-bold text-yellow-300">
+          {winnerNames}가 {maxScore.toLocaleString()}원으로 우승!
+        </span>
         <section className="flex gap-4 justify-center">
           {players.map((player, i) => renderPlayerPanel(player, player.name ?? `플레이어 ${i + 1}`, false))}
         </section>
+        <div className="flex gap-3">
+          <button
+            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 rounded-xl font-bold text-sm transition-colors"
+            onClick={handleExitConfirm}
+          >
+            나가기
+          </button>
+          <button
+            className={[
+              "px-6 py-3 bg-blue-700 rounded-xl font-bold text-sm transition-colors",
+              isHost ? "hover:bg-blue-600 active:bg-blue-800" : "opacity-40 cursor-not-allowed",
+            ].join(" ")}
+            disabled={!isHost}
+            onClick={handleRestartGame}
+          >
+            다시하기
+          </button>
+        </div>
         {renderExitControls()}
       </main>
     );
@@ -886,7 +966,7 @@ export default function MultiplayerGamePage() {
 
   // TODO: 정산 연출 애니메이션은 추후 구현. 지금은 굴리기·베팅·라운드 전환까지만 상호작용한다.
   return (
-    <main className="h-screen bg-zinc-950 text-white flex flex-col p-4 gap-5 overflow-hidden">
+    <main key="play" className="h-screen bg-zinc-950 text-white flex flex-col p-4 gap-5 overflow-hidden">
       {/* ── Casinos ─────────────────────────────────────────────────────── */}
       <section className="grid grid-cols-6 gap-3">
         {CASINO_NUMBERS.map((n) => (

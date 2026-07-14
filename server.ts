@@ -118,8 +118,28 @@ function shufflePlayers(players: PlayerState[], humanFirst: boolean): PlayerStat
   return arr;
 }
 
-// 방의 플레이어 구성·게임 설정으로 1라운드 초기 GameState를 만든다.
+// 플레이어 구성·게임 설정으로 1라운드 초기 GameState를 만든다.
 // createInitialState()/distributeRound()는 싱글플레이와 동일한 게임 엔진 함수를 재사용한다.
+// start-game(로비에서 넘어온 구성)과 restart-game(진행 중이던 게임의 구성을 그대로 재사용) 양쪽에서 공유한다.
+function buildGameStateFromConfigs(playerConfigs: PlayerConfig[], settings: GameSettings): GameState | null {
+  const state = createInitialState(playerConfigs);
+  const activeColors = state.players.map((p) => p.color);
+  const dist = distributeRound(state.billDeck, activeColors, settings.cutline);
+  if (!dist) return null;
+
+  state.casinos = dist.casinos;
+  state.billDeck = dist.remainingDeck;
+  state.round = 1;
+  state.turn = 0;
+  state.players = shufflePlayers(state.players, settings.humanFirst);
+  state.currentPlayerIndex = 0;
+  state.phase = "rolling";
+  state.currentRoll = null;
+  state.lastAction = null;
+
+  return state;
+}
+
 function buildInitialGameState(payload: StartGamePayload): GameState | null {
   const playerConfigs: PlayerConfig[] = payload.playerConfig.map((p, i) => ({
     color: p.color,
@@ -128,22 +148,7 @@ function buildInitialGameState(payload: StartGamePayload): GameState | null {
     modelId: p.modelId ?? undefined,
   }));
 
-  const state = createInitialState(playerConfigs);
-  const activeColors = state.players.map((p) => p.color);
-  const dist = distributeRound(state.billDeck, activeColors, payload.gameSettings.cutline);
-  if (!dist) return null;
-
-  state.casinos = dist.casinos;
-  state.billDeck = dist.remainingDeck;
-  state.round = 1;
-  state.turn = 0;
-  state.players = shufflePlayers(state.players, payload.gameSettings.humanFirst);
-  state.currentPlayerIndex = 0;
-  state.phase = "rolling";
-  state.currentRoll = null;
-  state.lastAction = null;
-
-  return state;
+  return buildGameStateFromConfigs(playerConfigs, payload.gameSettings);
 }
 
 app.prepare().then(() => {
@@ -727,6 +732,38 @@ app.prepare().then(() => {
         io.sockets.sockets.get(p.socketId)?.leave(roomId);
       }
       rooms.delete(roomId);
+    });
+
+    // 호스트가 게임 종료 화면에서 "다시하기"를 누르면, 진행 중이던(혹은 방금 끝난) 게임의 플레이어
+    // 구성(색상·isLLM·이름·모델)을 그대로 재사용해 소지금·지폐·순서를 전부 초기화한 새 게임을 만든다.
+    socket.on("restart-game", () => {
+      const roomId = socketRooms.get(socket.id);
+      if (!roomId) return;
+      const room = rooms.get(roomId);
+      if (!room?.gameState) return;
+      const participant = room.participants.find((p) => p.socketId === socket.id);
+      if (!participant?.isHost) return;
+
+      const playerConfigs: PlayerConfig[] = room.gameState.players.map((p) => ({
+        color: p.color,
+        isLLM: p.isLLM,
+        name: p.name,
+        modelId: p.modelId,
+      }));
+
+      const gameState = buildGameStateFromConfigs(playerConfigs, room.settings);
+      clearTurnTimer(room);
+      room.nextRoundPreview = null;
+      room.gameState = gameState;
+
+      if (gameState) {
+        console.log(`[Socket] 다시하기: ${roomId}`);
+        io.to(roomId).emit("game-state", gameState);
+        scheduleLLMAutoRollIfNeeded(roomId);
+        scheduleTurnTimerIfNeeded(roomId);
+      } else {
+        console.error(`[Socket] 다시하기 게임 상태 생성 실패(지폐 부족): ${roomId}`);
+      }
     });
 
     // /multi 페이지는 로비에서 방에 join된 소켓을 그대로 재사용하지만, game-started/game-state
