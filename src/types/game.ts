@@ -65,7 +65,7 @@ export interface GameState {
   lastReasoning?: string;
 }
 
-// ─── LLM Payload (matches DESIGN.md JSON schema) ─────────────────────────────
+// ─── LLM Payload (matches docs/las-vegas/DESIGN.md JSON schema) ─────────────────────────────
 
 export interface LLMGameState {
   game: {

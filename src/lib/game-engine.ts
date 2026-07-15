@@ -208,7 +208,7 @@ export function applyScoring(state: GameState): GameState {
 
 /**
  * Builds the JSON payload sent to an LLM player on their turn.
- * Shape matches the schema in DESIGN.md.
+ * Shape matches the schema in docs/las-vegas/DESIGN.md.
  */
 export function buildLLMPayload(
   state: GameState,

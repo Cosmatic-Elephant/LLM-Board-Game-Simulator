@@ -2,7 +2,7 @@ import type { Color, CasinoNumber, CasinoState } from "@/types/game";
 
 export const CASINO_NUMBERS: CasinoNumber[] = [1, 2, 3, 4, 5, 6];
 
-/** Total bill counts per denomination, per DESIGN.md */
+/** Total bill counts per denomination, per docs/las-vegas/DESIGN.md */
 const BILL_SPEC: [number, number][] = [
   [10000, 8],
   [20000, 8],

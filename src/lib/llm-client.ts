@@ -16,7 +16,7 @@ function detectProvider(modelId: string): Provider {
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
-/** Full system prompt from DESIGN.md, sent on every LLM call. */
+/** Full system prompt from docs/las-vegas/DESIGN.md, sent on every LLM call. */
 const SYSTEM_PROMPT = `You are a player in a board game called Las Vegas. You will receive the current game state as JSON and must decide which casino to place your dice at.
 
 ---

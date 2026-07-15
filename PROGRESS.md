@@ -37,9 +37,19 @@
 
 ---
 
+## 세션 13 (완료, 2026-07-15) — 게임 선택 UI · 컴포넌트 분리 · 문서 재배치
+
+- **게임 선택 기능 추가** (`src/app/page.tsx`): 로비에 `GAME_OPTIONS` 상수(라스베가스/요트 다이스) 도입. "게임 변경" 버튼 클릭 시 외부 클릭으로 닫히는 리스트박스가 열리고, 목록 항목 클릭 시 선택 게임 전환 + 현재 선택 항목 강조 표시. 선택된 게임에 따라 중앙 타이틀/서브타이틀이 교체되며, 싱글플레이 버튼은 라스베가스일 때만 기존 설정 팝업으로 연결되고(요트 다이스는 `console.log` 플레이스홀더), 멀티플레이 버튼은 라스베가스에서만 활성화(요트 다이스는 `disabled` + `cursor-not-allowed`)
+- **리스트박스 다듬기**: 목록 마지막에 클릭 불가능한 "곧 새로운 게임이 추가됩니다..." 안내 항목 추가(흐린 색상으로 구분), 목록에 `max-h-[300px]` + 세로 스크롤 적용
+- **컴포넌트 분리** (`page.tsx` 946줄 → 65줄, 커밋 `37a1f89`): 게임 무관 UI 프리미티브(`Toggle`/`SelectField`/`ReadOnlyBox`/`PopupHeader`/`GameSelectListbox`)를 `src/components/ui/`로, 라스베가스 전용 설정 팝업(`PlayerSetupPopup`/`MultiplayerPopup`/`MultiplayerRoomPopup`)과 색상 종속 컴포넌트(`ColorSelect`/`ColorDisplay`/`AIBadge`) · 상수(`constants.ts`)를 `src/components/las-vegas/`로 이동. `ColorSelect`와 `GameSelectListbox`에 중복돼 있던 "외부 클릭 시 닫힘" 로직은 `src/hooks/useClickOutside.ts` 훅으로 추출해 교체. 순수 파일 이동·import 정리만 수행했으며 게임 로직·동작은 변경하지 않음
+- **DESIGN.md 재배치**: 루트의 `DESIGN.md`를 `docs/las-vegas/DESIGN.md`로 이동(`git mv`로 이력 보존), `CLAUDE.md`(참조 3곳)와 `src/lib/bill-setup.ts`/`game-engine.ts`/`llm-client.ts`/`src/types/game.ts` 주석의 경로를 함께 갱신. `HISTORY.md`는 과거 시점을 있는 그대로 기록한 아카이브라 판단해 의도적으로 미수정
+- 각 단계마다 `npx tsc --noEmit` 통과 확인
+
+---
+
 ## 현재 상태
 
-싱글·멀티 모두 정산 연출(대기 → 애니메이션 → 라운드 종료/게임 종료 화면)이 동일한 수준으로 동작한다. 멀티는 방 생성부터 게임 종료·다시하기까지 엔드투엔드로 동작하며, LLM 프로바이더로 Anthropic/OpenAI/Google/NVIDIA NIM 4종을 지원한다(NVIDIA는 타입체크만 확인했고 실제 API 키로 호출 검증은 아직 안 함). `npx tsc --noEmit` 에러 없음.
+싱글·멀티 모두 정산 연출(대기 → 애니메이션 → 라운드 종료/게임 종료 화면)이 동일한 수준으로 동작한다. 멀티는 방 생성부터 게임 종료·다시하기까지 엔드투엔드로 동작하며, LLM 프로바이더로 Anthropic/OpenAI/Google/NVIDIA NIM 4종을 지원한다(NVIDIA는 타입체크만 확인했고 실제 API 키로 호출 검증은 아직 안 함). 로비에 게임 선택 UI가 추가되어 라스베가스/요트 다이스 중 고를 수 있으나, 실제 플레이 가능한 것은 라스베가스뿐이다(요트 다이스는 선택·타이틀 표시만 되고 설정 팝업은 플레이스홀더). `npx tsc --noEmit` 에러 없음.
 
 ---
 
@@ -50,6 +60,7 @@
 - [ ] NVIDIA NIM 연동을 실제 API 키로 호출 테스트하지 않음 — 타입체크만 확인된 상태
 - [ ] 라운드 마지막 베팅은 퇴장 애니메이션 없이 곧바로 정산 연출로 넘어감(의도된 단순화 — 정산으로 카지노가 초기화되기 전 상태를 diff할 수 없어 생략)
 - [ ] 정산 연출 도중 재접속한 클라이언트는 연출을 못 보고 최종 상태만 봄(`scoring-steps`는 1회성 브로드캐스트라 재요청 경로 없음)
+- [ ] 요트 다이스 싱글/멀티플레이 설정 팝업 미구현(현재 `src/app/page.tsx`의 `handleSinglePlayerClick`에 콘솔 로그 플레이스홀더만 존재), 게임 로직 자체도 아직 없음
 
 ---
 

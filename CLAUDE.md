@@ -4,7 +4,7 @@
 
 라스베가스(주사위 배치 보드게임) 시뮬레이터. 최대 4명의 플레이어가 인간 또는 LLM 어느 조합으로든 참여할 수 있다. 목적은 외부 LLM API 연동 실습이며, 로컬 실행 전용이다.
 
-- 게임 규칙과 JSON 스키마 전체는 `DESIGN.md`를 참조한다.
+- 게임 규칙과 JSON 스키마 전체는 `docs/las-vegas/DESIGN.md`를 참조한다.
 - 배포는 의도하지 않는다 (`npm run dev` 로컬 전용).
 
 ---
@@ -25,7 +25,9 @@
 
 ```
 /
-├── DESIGN.md                    # 게임 규칙 · LLM 페이로드 스키마 원본 (변경 금지)
+├── docs/
+│   └── las-vegas/
+│       └── DESIGN.md            # 게임 규칙 · LLM 페이로드 스키마 원본 (변경 금지)
 ├── CLAUDE.md                    # 이 파일 — Claude Code 가이드
 ├── PROGRESS.md                  # 세션별 작업 진행 기록
 ├── server.ts                    # 커스텀 Next.js + Socket.io 서버 (`npm run dev`가 실행하는 진입점)
@@ -90,7 +92,7 @@ SDK는 동적 import(`await import(...)`)로 지연 로드하므로 사용하지
 
 ### 5. 타이 제거 스코어링
 
-`scoreCasino()`는 같은 주사위 수를 가진 플레이어를 해당 랭크에서 전원 제거한다. 상위 랭크 타이만 제거되며 그 아래 플레이어들은 정상 정산된다. (`DESIGN.md` 예시: Red 3 / Green 3 / Yellow 1 → Yellow만 1등 수령)
+`scoreCasino()`는 같은 주사위 수를 가진 플레이어를 해당 랭크에서 전원 제거한다. 상위 랭크 타이만 제거되며 그 아래 플레이어들은 정상 정산된다. (`docs/las-vegas/DESIGN.md` 예시: Red 3 / Green 3 / Yellow 1 → Yellow만 1등 수령)
 
 ### 6. `CasinoNumber` 타입
 
